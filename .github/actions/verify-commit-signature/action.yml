@@ -51,14 +51,31 @@ runs:
           log_output=$(git log --show-signature -1 "$commit" 2>&1 || echo "")
           
           # Check if commit is signed (either GPG or SSH)
-          if ! echo "$verify_output" | grep -qE "Good signature|Valid" && ! echo "$log_output" | grep -qE "Good|Valid"; then
+          # For SSH, git verify-commit might return exit code 0 even if not explicitly saying "Good signature"
+          # Check for absence of error messages instead
+          has_error=$(echo "$verify_output" | grep -iE "error|invalid|bad|no signature|not signed" || true)
+          has_valid=$(echo "$verify_output" "$log_output" | grep -iE "Good signature|Valid|SSH Key Fingerprint" || true)
+          
+          if [ -n "$has_error" ] && [ -z "$has_valid" ]; then
+            return 1
+          fi
+          
+          # If verify-commit succeeded (exit 0) and we have signature info, consider it signed
+          if [ -z "$has_valid" ] && [ -z "$has_error" ]; then
+            # Check if there's any signature information at all
+            if echo "$log_output" | grep -qE "Signature|Fingerprint|key"; then
+              has_valid="yes"
+            fi
+          fi
+          
+          if [ -z "$has_valid" ]; then
             return 1
           fi
           
           # Determine signature type: SSH or GPG
-          if echo "$log_output" | grep -qE "SSH|ssh-ed25519|ecdsa-sha2"; then
+          if echo "$log_output" "$verify_output" | grep -qiE "SSH|ssh-ed25519|ecdsa-sha2|SSH Key Fingerprint"; then
             signature_type="SSH"
-          elif echo "$log_output" | grep -qE "GPG|gpg|Good signature"; then
+          elif echo "$log_output" "$verify_output" | grep -qiE "GPG|gpg|Good signature"; then
             signature_type="GPG"
           fi
           
@@ -109,6 +126,11 @@ runs:
             if echo "$log_output" "$verify_output" | grep -qi "sk-"; then
               is_sk=true
             fi
+            
+            # Debug output for SSH detection
+            echo "Debug SSH: fingerprint='$key_fingerprint', algorithm='$algorithm', is_sk=$is_sk" >&2
+            echo "Debug SSH: log_output contains:" >&2
+            echo "$log_output" | head -20 >&2
           fi
           
           # Handle GPG signatures
@@ -174,9 +196,20 @@ runs:
           fi
         }
         
+        # Debug: Show what git log and verify output
+        echo "=== Debug: Checking commit $COMMIT_SHA ==="
+        echo "--- git verify-commit output ---"
+        git verify-commit "$COMMIT_SHA" 2>&1 || true
+        echo "--- git log --show-signature output ---"
+        git log --show-signature -1 "$COMMIT_SHA" 2>&1 || true
+        echo "=========================================="
+        
         # Verify the commit
         ALGORITHM=$(check_commit "$COMMIT_SHA" 2>&1)
         CHECK_EXIT=$?
+        
+        echo "Detected algorithm: '$ALGORITHM'"
+        echo "Check exit code: $CHECK_EXIT"
         
         if [ $CHECK_EXIT -ne 0 ] || [ -z "$ALGORITHM" ]; then
           echo "is-signed=false" >> $GITHUB_OUTPUT
@@ -185,6 +218,7 @@ runs:
           
           if [ "${{ inputs.fail-on-unsigned }}" == "true" ]; then
             echo "❌ Commit $COMMIT_SHA is not signed or signature could not be verified"
+            echo "Debug: Algorithm detected was: '$ALGORITHM'"
             exit 1
           else
             echo "⚠️  Commit $COMMIT_SHA is not signed (non-fatal)"
@@ -209,6 +243,7 @@ runs:
         
         if [ "$IS_ALLOWED" = "false" ]; then
           echo "❌ Commit $COMMIT_SHA is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
+          echo "Debug: Detected algorithm '$ALGORITHM' does not match allowed algorithms: $ALLOWED_ALGOS"
           exit 1
         fi
         
@@ -232,13 +267,27 @@ runs:
           verify_output=$(git verify-commit "$commit" 2>&1 || true)
           log_output=$(git log --show-signature -1 "$commit" 2>&1 || echo "")
           
-          if ! echo "$verify_output" | grep -qE "Good signature|Valid" && ! echo "$log_output" | grep -qE "Good|Valid"; then
+          # Check if commit is signed
+          has_error=$(echo "$verify_output" | grep -iE "error|invalid|bad|no signature|not signed" || true)
+          has_valid=$(echo "$verify_output" "$log_output" | grep -iE "Good signature|Valid|SSH Key Fingerprint" || true)
+          
+          if [ -n "$has_error" ] && [ -z "$has_valid" ]; then
             return 1
           fi
           
-          if echo "$log_output" | grep -qE "SSH|ssh-ed25519|ecdsa-sha2"; then
+          if [ -z "$has_valid" ] && [ -z "$has_error" ]; then
+            if echo "$log_output" | grep -qE "Signature|Fingerprint|key"; then
+              has_valid="yes"
+            fi
+          fi
+          
+          if [ -z "$has_valid" ]; then
+            return 1
+          fi
+          
+          if echo "$log_output" "$verify_output" | grep -qiE "SSH|ssh-ed25519|ecdsa-sha2|SSH Key Fingerprint"; then
             signature_type="SSH"
-          elif echo "$log_output" | grep -qE "GPG|gpg|Good signature"; then
+          elif echo "$log_output" "$verify_output" | grep -qiE "GPG|gpg|Good signature"; then
             signature_type="GPG"
           fi
           
@@ -302,7 +351,7 @@ runs:
                 
                 if echo "$full_key_list" | grep -qiE "\[.*S.*\]|card|security|yubikey|sk"; then
                   is_sk=true
-                fi
+                fi  
                 
                 if echo "$verify_output" | grep -qiE "card|security|yubikey|sk"; then
                   is_sk=true
@@ -363,11 +412,20 @@ runs:
         for COMMIT in $COMMITS; do
           echo "Checking commit $COMMIT..."
           
+          # Debug output
+          echo "--- git verify-commit output for $COMMIT ---"
+          git verify-commit "$COMMIT" 2>&1 || true
+          echo "--- git log --show-signature output for $COMMIT ---"
+          git log --show-signature -1 "$COMMIT" 2>&1 || true
+          
           ALGORITHM=$(check_commit "$COMMIT" 2>&1)
           CHECK_EXIT=$?
           
+          echo "Detected algorithm for $COMMIT: '$ALGORITHM' (exit code: $CHECK_EXIT)"
+          
           if [ $CHECK_EXIT -ne 0 ] || [ -z "$ALGORITHM" ]; then
             echo "❌ Commit $COMMIT is not signed or signature could not be verified"
+            echo "Debug: Algorithm detected was: '$ALGORITHM'"
             FAILED=1
             continue
           fi
@@ -384,6 +442,7 @@ runs:
           
           if [ "$IS_ALLOWED" = "false" ]; then
             echo "❌ Commit $COMMIT is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
+            echo "Debug: Detected algorithm '$ALGORITHM' does not match allowed algorithms: $ALLOWED_ALGOS"
             FAILED=1
           else
             echo "✅ Commit $COMMIT is signed with allowed algorithm: $ALGORITHM"
