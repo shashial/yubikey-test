@@ -261,8 +261,11 @@ runs:
           fi
           
           # Return algorithm or empty if not found
+          # IMPORTANT: Only output the algorithm to stdout, all debug goes to stderr
           if [ -n "$algorithm" ]; then
-            echo "$algorithm"
+            # Output ONLY the algorithm to stdout (will be captured)
+            # Use printf instead of echo to avoid any issues
+            printf '%s\n' "$algorithm"
             return 0
           else
             return 1
@@ -270,21 +273,25 @@ runs:
         }
         
         # Debug: Show what git log and verify output
-        echo "=== Debug: Checking commit $COMMIT_SHA ==="
-        echo "--- git verify-commit output ---"
+        echo "=== Debug: Checking commit $COMMIT_SHA ===" >&2
+        echo "--- git verify-commit output ---" >&2
         git verify-commit "$COMMIT_SHA" 2>&1 || true
-        echo "--- git log --show-signature output ---"
+        echo "--- git log --show-signature output ---" >&2
         git log --show-signature -1 "$COMMIT_SHA" 2>&1 || true
-        echo "--- git show commit signature data ---"
+        echo "--- git show commit signature data ---" >&2
         git show "$COMMIT_SHA" --format=raw --no-patch 2>&1 | grep -A 5 "gpgsig" || true
-        echo "=========================================="
+        echo "==========================================" >&2
         
         # Verify the commit
-        ALGORITHM=$(check_commit "$COMMIT_SHA" 2>&1)
+        # Capture only stdout (algorithm), stderr (debug) goes to console
+        # Set up file descriptor 3 to point to stderr, then redirect stderr there during capture
+        exec 3>&2
+        ALGORITHM=$({ check_commit "$COMMIT_SHA"; } 2>&3)
         CHECK_EXIT=$?
+        exec 3>&-
         
-        echo "Detected algorithm: '$ALGORITHM'"
-        echo "Check exit code: $CHECK_EXIT"
+        echo "Detected algorithm: '$ALGORITHM'" >&2
+        echo "Check exit code: $CHECK_EXIT" >&2
         
         if [ $CHECK_EXIT -ne 0 ] || [ -z "$ALGORITHM" ]; then
           echo "is-signed=false" >> $GITHUB_OUTPUT
@@ -554,10 +561,13 @@ runs:
           echo "--- git log --show-signature output for $COMMIT ---"
           git log --show-signature -1 "$COMMIT" 2>&1 || true
           
-          ALGORITHM=$(check_commit "$COMMIT" 2>&1)
+          # Capture only stdout, let stderr (debug) go through
+          exec 3>&2
+          ALGORITHM=$({ check_commit "$COMMIT"; } 2>&3)
           CHECK_EXIT=$?
+          exec 3>&-
           
-          echo "Detected algorithm for $COMMIT: '$ALGORITHM' (exit code: $CHECK_EXIT)"
+          echo "Detected algorithm for $COMMIT: '$ALGORITHM' (exit code: $CHECK_EXIT)" >&2
           
           if [ $CHECK_EXIT -ne 0 ] || [ -z "$ALGORITHM" ]; then
             echo "❌ Commit $COMMIT is not signed or signature could not be verified"
