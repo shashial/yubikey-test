@@ -1,0 +1,328 @@
+name: 'Verify Commit Signature'
+description: 'Verifies that commits are signed with ED25519-SK or ECDSA-SK algorithm'
+inputs:
+  commit-sha:
+    description: 'Commit SHA to verify (defaults to HEAD)'
+    required: false
+    default: 'HEAD'
+  fail-on-unsigned:
+    description: 'Fail if commit is not signed'
+    required: false
+    default: 'true'
+  allowed-algorithms:
+    description: 'Comma-separated list of allowed algorithms (ED25519-SK,ECDSA-SK)'
+    required: false
+    default: 'ED25519-SK,ECDSA-SK'
+
+outputs:
+  is-signed:
+    description: 'Whether the commit is signed'
+    value: ${{ steps.verify.outputs.is-signed }}
+  algorithm:
+    description: 'The signature algorithm used'
+    value: ${{ steps.verify.outputs.algorithm }}
+  is-allowed:
+    description: 'Whether the signature uses an allowed algorithm'
+    value: ${{ steps.verify.outputs.is-allowed }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Verify commit signature
+      id: verify
+      shell: bash
+      run: |
+        COMMIT_SHA="${{ inputs.commit-sha }}"
+        ALLOWED_ALGOS="${{ inputs.allowed-algorithms }}"
+        
+        # Function to check commit signature and determine algorithm
+        check_commit() {
+          local commit=$1
+          local verify_output
+          local key_id
+          local algorithm=""
+          local is_sk=false
+          
+          # Check if commit is signed
+          verify_output=$(git verify-commit "$commit" 2>&1 || true)
+          
+          if ! echo "$verify_output" | grep -q "Good signature"; then
+            echo "UNSIGNED"
+            return 1
+          fi
+          
+          # Extract key ID
+          key_id=$(echo "$verify_output" | grep -oP '(?<=using )\S+(?= key)' | head -1 || echo "")
+          
+          if [ -z "$key_id" ]; then
+            key_id=$(git log --show-signature -1 "$commit" 2>&1 | grep -oP '(?<=key ID )\S+' | head -1 || echo "")
+          fi
+          
+          # Get key information
+          if [ -n "$key_id" ]; then
+            # Get algorithm code from key (22=ED25519, 19=ECDSA P-256, 18=ECDSA P-384, 25=ECDSA P-521)
+            key_info=$(gpg --list-keys --with-colons "$key_id" 2>/dev/null || echo "")
+            
+            if [ -n "$key_info" ]; then
+              algo_code=$(echo "$key_info" | grep "^pub:" | cut -d: -f4 || echo "")
+              
+              case "$algo_code" in
+                22)
+                  algorithm="ED25519"
+                  ;;
+                19|18|25)
+                  algorithm="ECDSA"
+                  ;;
+              esac
+              
+              # Check if key is a security key by looking for keygrip and checking key listing
+              full_key_list=$(gpg --list-keys --with-keygrip "$key_id" 2>/dev/null || echo "")
+              
+              # Security keys often show [S] or have keygrip, check for SK indicators
+              if echo "$full_key_list" | grep -qiE "\[.*S.*\]|card|security|yubikey|sk"; then
+                is_sk=true
+              fi
+              
+              # Also check verify output for SK indicators
+              if echo "$verify_output" | grep -qiE "card|security|yubikey|sk"; then
+                is_sk=true
+              fi
+            fi
+          fi
+          
+          # Fallback: try to get algorithm from git log output
+          if [ -z "$algorithm" ]; then
+            log_output=$(git log --show-signature -1 "$commit" 2>&1 || echo "")
+            
+            if echo "$log_output" | grep -qi "ed25519"; then
+              algorithm="ED25519"
+              if echo "$log_output" | grep -qiE "sk|card|security|yubikey"; then
+                is_sk=true
+              fi
+            elif echo "$log_output" | grep -qi "ecdsa"; then
+              algorithm="ECDSA"
+              if echo "$log_output" | grep -qiE "sk|card|security|yubikey"; then
+                is_sk=true
+              fi
+            fi
+          fi
+          
+          # Add SK suffix if it's a security key
+          if [ "$is_sk" = true ] && [ -n "$algorithm" ]; then
+            algorithm="${algorithm}-SK"
+          fi
+          
+          # If we still don't have algorithm but commit is signed, try one more method
+          if [ -z "$algorithm" ]; then
+            # Check verify output directly for algorithm mentions
+            if echo "$verify_output" | grep -qi "ed25519"; then
+              algorithm="ED25519"
+              if echo "$verify_output" | grep -qiE "sk|card|security|yubikey"; then
+                algorithm="ED25519-SK"
+              fi
+            elif echo "$verify_output" | grep -qi "ecdsa"; then
+              algorithm="ECDSA"
+              if echo "$verify_output" | grep -qiE "sk|card|security|yubikey"; then
+                algorithm="ECDSA-SK"
+              fi
+            fi
+          fi
+          
+          echo "$algorithm"
+          return 0
+        }
+        
+        # Verify the commit
+        ALGORITHM=$(check_commit "$COMMIT_SHA" 2>&1 || echo "UNSIGNED")
+        
+        if [ "$ALGORITHM" = "UNSIGNED" ]; then
+          echo "is-signed=false" >> $GITHUB_OUTPUT
+          echo "algorithm=" >> $GITHUB_OUTPUT
+          echo "is-allowed=false" >> $GITHUB_OUTPUT
+          
+          if [ "${{ inputs.fail-on-unsigned }}" == "true" ]; then
+            echo "❌ Commit $COMMIT_SHA is not signed"
+            exit 1
+          else
+            echo "⚠️  Commit $COMMIT_SHA is not signed (non-fatal)"
+            exit 0
+          fi
+        fi
+        
+        if [ -z "$ALGORITHM" ]; then
+          echo "is-signed=true" >> $GITHUB_OUTPUT
+          echo "algorithm=UNKNOWN" >> $GITHUB_OUTPUT
+          echo "is-allowed=false" >> $GITHUB_OUTPUT
+          echo "❌ Commit $COMMIT_SHA: Could not determine signature algorithm"
+          exit 1
+        fi
+        
+        # Check if algorithm is in allowed list
+        IS_ALLOWED="false"
+        IFS=',' read -ra ALGO_ARRAY <<< "$ALLOWED_ALGOS"
+        for algo in "${ALGO_ARRAY[@]}"; do
+          algo_trimmed=$(echo "$algo" | xargs)
+          if [ "$ALGORITHM" == "$algo_trimmed" ]; then
+            IS_ALLOWED="true"
+            break
+          fi
+        done
+        
+        echo "is-signed=true" >> $GITHUB_OUTPUT
+        echo "algorithm=$ALGORITHM" >> $GITHUB_OUTPUT
+        echo "is-allowed=$IS_ALLOWED" >> $GITHUB_OUTPUT
+        
+        if [ "$IS_ALLOWED" = "false" ]; then
+          echo "❌ Commit $COMMIT_SHA is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
+          exit 1
+        fi
+        
+        echo "✅ Commit $COMMIT_SHA is signed with allowed algorithm: $ALGORITHM"
+
+    - name: Verify all commits in PR/push
+      if: github.event_name == 'pull_request' || github.event_name == 'push'
+      shell: bash
+      run: |
+        # Function to check commit (same as above)
+        check_commit() {
+          local commit=$1
+          local verify_output
+          local key_id
+          local algorithm=""
+          local is_sk=false
+          
+          verify_output=$(git verify-commit "$commit" 2>&1 || true)
+          
+          if ! echo "$verify_output" | grep -q "Good signature"; then
+            echo "UNSIGNED"
+            return 1
+          fi
+          
+          key_id=$(echo "$verify_output" | grep -oP '(?<=using )\S+(?= key)' | head -1 || echo "")
+          
+          if [ -z "$key_id" ]; then
+            key_id=$(git log --show-signature -1 "$commit" 2>&1 | grep -oP '(?<=key ID )\S+' | head -1 || echo "")
+          fi
+          
+          if [ -n "$key_id" ]; then
+            key_info=$(gpg --list-keys --with-colons "$key_id" 2>/dev/null || echo "")
+            
+            if [ -n "$key_info" ]; then
+              algo_code=$(echo "$key_info" | grep "^pub:" | cut -d: -f4 || echo "")
+              
+              case "$algo_code" in
+                22) algorithm="ED25519" ;;
+                19|18|25) algorithm="ECDSA" ;;
+              esac
+              
+              full_key_list=$(gpg --list-keys --with-keygrip "$key_id" 2>/dev/null || echo "")
+              
+              if echo "$full_key_list" | grep -qiE "\[.*S.*\]|card|security|yubikey|sk"; then
+                is_sk=true
+              fi
+              
+              if echo "$verify_output" | grep -qiE "card|security|yubikey|sk"; then
+                is_sk=true
+              fi
+            fi
+          fi
+          
+          if [ -z "$algorithm" ]; then
+            log_output=$(git log --show-signature -1 "$commit" 2>&1 || echo "")
+            
+            if echo "$log_output" | grep -qi "ed25519"; then
+              algorithm="ED25519"
+              if echo "$log_output" | grep -qiE "sk|card|security|yubikey"; then
+                is_sk=true
+              fi
+            elif echo "$log_output" | grep -qi "ecdsa"; then
+              algorithm="ECDSA"
+              if echo "$log_output" | grep -qiE "sk|card|security|yubikey"; then
+                is_sk=true
+              fi
+            fi
+          fi
+          
+          if [ "$is_sk" = true ] && [ -n "$algorithm" ]; then
+            algorithm="${algorithm}-SK"
+          fi
+          
+          if [ -z "$algorithm" ]; then
+            if echo "$verify_output" | grep -qi "ed25519"; then
+              algorithm="ED25519"
+              if echo "$verify_output" | grep -qiE "sk|card|security|yubikey"; then
+                algorithm="ED25519-SK"
+              fi
+            elif echo "$verify_output" | grep -qi "ecdsa"; then
+              algorithm="ECDSA"
+              if echo "$verify_output" | grep -qiE "sk|card|security|yubikey"; then
+                algorithm="ECDSA-SK"
+              fi
+            fi
+          fi
+          
+          echo "$algorithm"
+          return 0
+        }
+        
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+        else
+          BASE_SHA="${{ github.event.before }}"
+          HEAD_SHA="${{ github.event.after }}"
+        fi
+        
+        # Get list of commits to verify
+        if [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ] && [ -n "$BASE_SHA" ]; then
+          COMMITS=$(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA" 2>/dev/null || echo "")
+        else
+          COMMITS="$HEAD_SHA"
+        fi
+        
+        if [ -z "$COMMITS" ]; then
+          echo "No commits to verify"
+          exit 0
+        fi
+        
+        FAILED=0
+        ALLOWED_ALGOS="${{ inputs.allowed-algorithms }}"
+        
+        for COMMIT in $COMMITS; do
+          echo "Checking commit $COMMIT..."
+          
+          ALGORITHM=$(check_commit "$COMMIT" 2>&1 || echo "UNSIGNED")
+          
+          if [ "$ALGORITHM" = "UNSIGNED" ]; then
+            echo "❌ Commit $COMMIT is not signed"
+            FAILED=1
+            continue
+          fi
+          
+          if [ -z "$ALGORITHM" ]; then
+            echo "❌ Commit $COMMIT: Could not determine signature algorithm"
+            FAILED=1
+            continue
+          fi
+          
+          IS_ALLOWED="false"
+          IFS=',' read -ra ALGO_ARRAY <<< "$ALLOWED_ALGOS"
+          for algo in "${ALGO_ARRAY[@]}"; do
+            algo_trimmed=$(echo "$algo" | xargs)
+            if [ "$ALGORITHM" == "$algo_trimmed" ]; then
+              IS_ALLOWED="true"
+              break
+            fi
+          done
+          
+          if [ "$IS_ALLOWED" = "false" ]; then
+            echo "❌ Commit $COMMIT is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
+            FAILED=1
+          else
+            echo "✅ Commit $COMMIT is signed with allowed algorithm: $ALGORITHM"
+          fi
+        done
+        
+        if [ $FAILED -eq 1 ]; then
+          exit 1
+        fi

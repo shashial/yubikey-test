@@ -1,0 +1,24 @@
+name: Verify Commit Signatures
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  verify-commits:
+    name: Verify Commit Signatures
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to verify commits
+
+      - name: Verify commit signatures
+        uses: ./.github/actions/verify-commit-signature
+        with:
+          fail-on-unsigned: 'true'
+          allowed-algorithms: 'ED25519-SK,ECDSA-SK'
+
