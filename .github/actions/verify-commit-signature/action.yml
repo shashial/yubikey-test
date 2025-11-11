@@ -108,10 +108,48 @@ runs:
             
             # Extract signature data from raw commit to parse key type
             # SSH signatures in git commits contain the key type in the signature blob
+            # The signature is base64 encoded, so we need to check both raw and decoded
             sig_data=$(echo "$raw_commit" | grep -A 100 "^gpgsig" | head -50 || echo "")
             
-            # Try to extract key type from signature data
-            # SSH signatures start with namespace and key type
+            # Decode the base64 signature to check for key type
+            # Extract just the base64 part (between BEGIN and END markers)
+            sig_base64=$(echo "$sig_data" | grep -v "BEGIN\|END\|gpgsig" | tr -d ' \n' || echo "")
+            
+            # Try to decode and check (but also check base64 directly)
+            # Base64 encoding of "sk-ssh-ed25519@openssh.com" contains patterns we can detect
+            # The base64 string "c2stc3NoLWVkMjU1MTlAb3BlbnNzaC5jb20" decodes to "sk-ssh-ed25519@openssh.com"
+            if [ -n "$sig_base64" ]; then
+              # Try to decode the signature (first part contains key type info)
+              # We can check the base64 string directly for encoded patterns
+              sig_decoded=$(echo "$sig_base64" | base64 -d 2>/dev/null | strings 2>/dev/null | head -20 || echo "")
+            else
+              sig_decoded=""
+            fi
+            
+            # Check decoded signature first (most reliable)
+            if echo "$sig_decoded" | grep -q "sk-ssh-ed25519"; then
+              algorithm="ED25519"
+              is_sk=true
+            elif echo "$sig_decoded" | grep -q "sk-ecdsa"; then
+              algorithm="ECDSA"
+              is_sk=true
+            elif echo "$sig_decoded" | grep -q "ssh-ed25519"; then
+              algorithm="ED25519"
+            elif echo "$sig_decoded" | grep -qE "ecdsa-sha2|ecdsa"; then
+              algorithm="ECDSA"
+            fi
+            
+            # Also check base64 encoded string for patterns
+            # "c2stc3NoLWVkMjU1MTlA" is base64 for "sk-ssh-ed25519@"
+            if echo "$sig_base64" | grep -qE "c2stc3NoLWVkMjU1MTlA|YzJrLWMzc0gtZWQyNTUxOUB"; then
+              algorithm="ED25519"
+              is_sk=true
+            elif echo "$sig_base64" | grep -qE "c2stZWNkc2E|YzJrLWVjZHNh"; then
+              algorithm="ECDSA"
+              is_sk=true
+            fi
+            
+            # Check raw signature data (might have some readable parts)
             if echo "$sig_data" | grep -q "sk-ssh-ed25519"; then
               algorithm="ED25519"
               is_sk=true
@@ -120,15 +158,8 @@ runs:
               is_sk=true
             elif echo "$sig_data" | grep -q "ssh-ed25519"; then
               algorithm="ED25519"
-              # Check if it's actually sk-ssh-ed25519 (might be in different format)
-              if echo "$sig_data" | grep -qE "sk|security|yubikey"; then
-                is_sk=true
-              fi
             elif echo "$sig_data" | grep -qE "ecdsa-sha2|ecdsa"; then
               algorithm="ECDSA"
-              if echo "$sig_data" | grep -qE "sk|security|yubikey"; then
-                is_sk=true
-              fi
             fi
             
             # Check for security key (SK) key types in the output
@@ -170,8 +201,9 @@ runs:
             
             # Debug output for SSH detection
             echo "Debug SSH: fingerprint='$key_fingerprint', algorithm='$algorithm', is_sk=$is_sk" >&2
-            echo "Debug SSH: signature data preview:" >&2
-            echo "$sig_data" | head -10 >&2
+            echo "Debug SSH: sig_base64 length=${#sig_base64}, first 100 chars: ${sig_base64:0:100}" >&2
+            echo "Debug SSH: sig_decoded preview:" >&2
+            echo "$sig_decoded" | head -5 >&2
           fi
           
           # Handle GPG signatures
@@ -358,7 +390,38 @@ runs:
             # Extract signature data from raw commit to parse key type
             sig_data=$(echo "$raw_commit" | grep -A 100 "^gpgsig" | head -50 || echo "")
             
-            # Try to extract key type from signature data
+            # Decode the base64 signature to check for key type
+            sig_base64=$(echo "$sig_data" | grep -v "BEGIN\|END\|gpgsig" | tr -d ' \n' || echo "")
+            
+            if [ -n "$sig_base64" ]; then
+              sig_decoded=$(echo "$sig_base64" | base64 -d 2>/dev/null | strings 2>/dev/null | head -20 || echo "")
+            else
+              sig_decoded=""
+            fi
+            
+            # Check decoded signature first
+            if echo "$sig_decoded" | grep -q "sk-ssh-ed25519"; then
+              algorithm="ED25519"
+              is_sk=true
+            elif echo "$sig_decoded" | grep -q "sk-ecdsa"; then
+              algorithm="ECDSA"
+              is_sk=true
+            elif echo "$sig_decoded" | grep -q "ssh-ed25519"; then
+              algorithm="ED25519"
+            elif echo "$sig_decoded" | grep -qE "ecdsa-sha2|ecdsa"; then
+              algorithm="ECDSA"
+            fi
+            
+            # Check base64 encoded string for patterns
+            if echo "$sig_base64" | grep -qE "c2stc3NoLWVkMjU1MTlA|YzJrLWMzc0gtZWQyNTUxOUB"; then
+              algorithm="ED25519"
+              is_sk=true
+            elif echo "$sig_base64" | grep -qE "c2stZWNkc2E|YzJrLWVjZHNh"; then
+              algorithm="ECDSA"
+              is_sk=true
+            fi
+            
+            # Check raw signature data
             if echo "$sig_data" | grep -q "sk-ssh-ed25519"; then
               algorithm="ED25519"
               is_sk=true
@@ -367,14 +430,8 @@ runs:
               is_sk=true
             elif echo "$sig_data" | grep -q "ssh-ed25519"; then
               algorithm="ED25519"
-              if echo "$sig_data" | grep -qE "sk|security|yubikey"; then
-                is_sk=true
-              fi
             elif echo "$sig_data" | grep -qE "ecdsa-sha2|ecdsa"; then
               algorithm="ECDSA"
-              if echo "$sig_data" | grep -qE "sk|security|yubikey"; then
-                is_sk=true
-              fi
             fi
             
             # Check for security key (SK) key types
