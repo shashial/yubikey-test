@@ -199,11 +199,6 @@ runs:
               is_sk=true
             fi
             
-            # Debug output for SSH detection
-            echo "Debug SSH: fingerprint='$key_fingerprint', algorithm='$algorithm', is_sk=$is_sk" >&2
-            echo "Debug SSH: sig_base64 length=${#sig_base64}, first 100 chars: ${sig_base64:0:100}" >&2
-            echo "Debug SSH: sig_decoded preview:" >&2
-            echo "$sig_decoded" | head -5 >&2
           fi
           
           # Handle GPG signatures
@@ -272,16 +267,6 @@ runs:
           fi
         }
         
-        # Debug: Show what git log and verify output
-        echo "=== Debug: Checking commit $COMMIT_SHA ===" >&2
-        echo "--- git verify-commit output ---" >&2
-        git verify-commit "$COMMIT_SHA" 2>&1 || true
-        echo "--- git log --show-signature output ---" >&2
-        git log --show-signature -1 "$COMMIT_SHA" 2>&1 || true
-        echo "--- git show commit signature data ---" >&2
-        git show "$COMMIT_SHA" --format=raw --no-patch 2>&1 | grep -A 5 "gpgsig" || true
-        echo "==========================================" >&2
-        
         # Verify the commit
         # Capture only stdout (algorithm), stderr (debug) goes to console
         # Set up file descriptor 3 to point to stderr, then redirect stderr there during capture
@@ -290,9 +275,6 @@ runs:
         CHECK_EXIT=$?
         exec 3>&-
         
-        echo "Detected algorithm: '$ALGORITHM'" >&2
-        echo "Check exit code: $CHECK_EXIT" >&2
-        
         if [ $CHECK_EXIT -ne 0 ] || [ -z "$ALGORITHM" ]; then
           echo "is-signed=false" >> $GITHUB_OUTPUT
           echo "algorithm=" >> $GITHUB_OUTPUT
@@ -300,7 +282,6 @@ runs:
           
           if [ "${{ inputs.fail-on-unsigned }}" == "true" ]; then
             echo "❌ Commit $COMMIT_SHA is not signed or signature could not be verified"
-            echo "Debug: Algorithm detected was: '$ALGORITHM'"
             exit 1
           else
             echo "⚠️  Commit $COMMIT_SHA is not signed (non-fatal)"
@@ -325,7 +306,6 @@ runs:
         
         if [ "$IS_ALLOWED" = "false" ]; then
           echo "❌ Commit $COMMIT_SHA is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
-          echo "Debug: Detected algorithm '$ALGORITHM' does not match allowed algorithms: $ALLOWED_ALGOS"
           exit 1
         fi
         
@@ -555,23 +535,14 @@ runs:
         for COMMIT in $COMMITS; do
           echo "Checking commit $COMMIT..."
           
-          # Debug output
-          echo "--- git verify-commit output for $COMMIT ---"
-          git verify-commit "$COMMIT" 2>&1 || true
-          echo "--- git log --show-signature output for $COMMIT ---"
-          git log --show-signature -1 "$COMMIT" 2>&1 || true
-          
           # Capture only stdout, let stderr (debug) go through
           exec 3>&2
           ALGORITHM=$({ check_commit "$COMMIT"; } 2>&3)
           CHECK_EXIT=$?
           exec 3>&-
           
-          echo "Detected algorithm for $COMMIT: '$ALGORITHM' (exit code: $CHECK_EXIT)" >&2
-          
           if [ $CHECK_EXIT -ne 0 ] || [ -z "$ALGORITHM" ]; then
             echo "❌ Commit $COMMIT is not signed or signature could not be verified"
-            echo "Debug: Algorithm detected was: '$ALGORITHM'"
             FAILED=1
             continue
           fi
@@ -588,7 +559,6 @@ runs:
           
           if [ "$IS_ALLOWED" = "false" ]; then
             echo "❌ Commit $COMMIT is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
-            echo "Debug: Detected algorithm '$ALGORITHM' does not match allowed algorithms: $ALLOWED_ALGOS"
             FAILED=1
           else
             echo "✅ Commit $COMMIT is signed with allowed algorithm: $ALGORITHM"
