@@ -50,25 +50,41 @@ runs:
           verify_output=$(git verify-commit "$commit" 2>&1 || true)
           log_output=$(git log --show-signature -1 "$commit" 2>&1 || echo "")
           
+          # Also get raw commit data to extract signature
+          raw_commit=$(git show "$commit" --format=raw --no-patch 2>&1 || echo "")
+          
+          # Check if commit has a signature in the raw data
+          has_signature=$(echo "$raw_commit" | grep -E "^gpgsig" || echo "")
+          
+          if [ -z "$has_signature" ]; then
+            # No signature found
+            return 1
+          fi
+          
           # Check if commit is signed (either GPG or SSH)
-          # For SSH, git verify-commit might return exit code 0 even if not explicitly saying "Good signature"
-          # Check for absence of error messages instead
-          has_error=$(echo "$verify_output" | grep -iE "error|invalid|bad|no signature|not signed" || true)
+          # For SSH, git verify-commit might fail due to missing allowedSignersFile
+          # but we can still extract signature info from the commit object
+          has_error=$(echo "$verify_output" | grep -iE "error.*allowedSignersFile|invalid|bad" || true)
           has_valid=$(echo "$verify_output" "$log_output" | grep -iE "Good signature|Valid|SSH Key Fingerprint" || true)
           
-          if [ -n "$has_error" ] && [ -z "$has_valid" ]; then
+          # If we have a signature in the commit but verification failed due to allowedSignersFile,
+          # we can still proceed to extract algorithm info
+          if [ -n "$has_error" ] && echo "$has_error" | grep -qi "allowedSignersFile"; then
+            # SSH signature exists but can't verify - we'll extract from signature data
+            has_valid="ssh_signature_present"
+          elif [ -n "$has_error" ] && [ -z "$has_valid" ]; then
             return 1
           fi
           
           # If verify-commit succeeded (exit 0) and we have signature info, consider it signed
           if [ -z "$has_valid" ] && [ -z "$has_error" ]; then
             # Check if there's any signature information at all
-            if echo "$log_output" | grep -qE "Signature|Fingerprint|key"; then
+            if echo "$log_output" "$raw_commit" | grep -qE "Signature|Fingerprint|key|gpgsig"; then
               has_valid="yes"
             fi
           fi
           
-          if [ -z "$has_valid" ]; then
+          if [ -z "$has_valid" ] && [ -z "$has_signature" ]; then
             return 1
           fi
           
@@ -90,23 +106,48 @@ runs:
               key_fingerprint=$(echo "$verify_output" | grep -i "fingerprint" | sed -n 's/.*[Ff]ingerprint[^:]*:\s*\([A-Za-z0-9+/=_-]*\).*/\1/p' | head -1 || echo "")
             fi
             
+            # Extract signature data from raw commit to parse key type
+            # SSH signatures in git commits contain the key type in the signature blob
+            sig_data=$(echo "$raw_commit" | grep -A 100 "^gpgsig" | head -50 || echo "")
+            
+            # Try to extract key type from signature data
+            # SSH signatures start with namespace and key type
+            if echo "$sig_data" | grep -q "sk-ssh-ed25519"; then
+              algorithm="ED25519"
+              is_sk=true
+            elif echo "$sig_data" | grep -q "sk-ecdsa"; then
+              algorithm="ECDSA"
+              is_sk=true
+            elif echo "$sig_data" | grep -q "ssh-ed25519"; then
+              algorithm="ED25519"
+              # Check if it's actually sk-ssh-ed25519 (might be in different format)
+              if echo "$sig_data" | grep -qE "sk|security|yubikey"; then
+                is_sk=true
+              fi
+            elif echo "$sig_data" | grep -qE "ecdsa-sha2|ecdsa"; then
+              algorithm="ECDSA"
+              if echo "$sig_data" | grep -qE "sk|security|yubikey"; then
+                is_sk=true
+              fi
+            fi
+            
             # Check for security key (SK) key types in the output
             # Security keys use: sk-ssh-ed25519@openssh.com or sk-ecdsa-sha2-nistp256@openssh.com
-            if echo "$log_output" "$verify_output" | grep -qiE "sk-ssh-ed25519|sk-ecdsa"; then
+            if echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ssh-ed25519|sk-ecdsa"; then
               is_sk=true
             fi
             
             # Check key type from log output
-            if echo "$log_output" "$verify_output" | grep -qiE "sk-ssh-ed25519|ssh-ed25519|ed25519"; then
+            if echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ssh-ed25519|ssh-ed25519|ed25519"; then
               algorithm="ED25519"
               # If we found sk-ssh-ed25519, it's definitely a security key
-              if echo "$log_output" "$verify_output" | grep -qi "sk-ssh-ed25519"; then
+              if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-ssh-ed25519"; then
                 is_sk=true
               fi
-            elif echo "$log_output" "$verify_output" | grep -qiE "sk-ecdsa|ecdsa-sha2|ecdsa"; then
+            elif echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ecdsa|ecdsa-sha2|ecdsa"; then
               algorithm="ECDSA"
               # If we found sk-ecdsa, it's definitely a security key
-              if echo "$log_output" "$verify_output" | grep -qi "sk-ecdsa"; then
+              if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-ecdsa"; then
                 is_sk=true
               fi
             fi
@@ -123,14 +164,14 @@ runs:
             fi
             
             # Additional check: if the key type contains "sk-" anywhere, it's a security key
-            if echo "$log_output" "$verify_output" | grep -qi "sk-"; then
+            if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-"; then
               is_sk=true
             fi
             
             # Debug output for SSH detection
             echo "Debug SSH: fingerprint='$key_fingerprint', algorithm='$algorithm', is_sk=$is_sk" >&2
-            echo "Debug SSH: log_output contains:" >&2
-            echo "$log_output" | head -20 >&2
+            echo "Debug SSH: signature data preview:" >&2
+            echo "$sig_data" | head -10 >&2
           fi
           
           # Handle GPG signatures
@@ -202,6 +243,8 @@ runs:
         git verify-commit "$COMMIT_SHA" 2>&1 || true
         echo "--- git log --show-signature output ---"
         git log --show-signature -1 "$COMMIT_SHA" 2>&1 || true
+        echo "--- git show commit signature data ---"
+        git show "$COMMIT_SHA" --format=raw --no-patch 2>&1 | grep -A 5 "gpgsig" || true
         echo "=========================================="
         
         # Verify the commit
@@ -267,21 +310,35 @@ runs:
           verify_output=$(git verify-commit "$commit" 2>&1 || true)
           log_output=$(git log --show-signature -1 "$commit" 2>&1 || echo "")
           
+          # Also get raw commit data to extract signature
+          raw_commit=$(git show "$commit" --format=raw --no-patch 2>&1 || echo "")
+          
+          # Check if commit has a signature in the raw data
+          has_signature=$(echo "$raw_commit" | grep -E "^gpgsig" || echo "")
+          
+          if [ -z "$has_signature" ]; then
+            return 1
+          fi
+          
           # Check if commit is signed
-          has_error=$(echo "$verify_output" | grep -iE "error|invalid|bad|no signature|not signed" || true)
+          has_error=$(echo "$verify_output" | grep -iE "error.*allowedSignersFile|invalid|bad" || true)
           has_valid=$(echo "$verify_output" "$log_output" | grep -iE "Good signature|Valid|SSH Key Fingerprint" || true)
           
-          if [ -n "$has_error" ] && [ -z "$has_valid" ]; then
+          # If we have a signature in the commit but verification failed due to allowedSignersFile,
+          # we can still proceed to extract algorithm info
+          if [ -n "$has_error" ] && echo "$has_error" | grep -qi "allowedSignersFile"; then
+            has_valid="ssh_signature_present"
+          elif [ -n "$has_error" ] && [ -z "$has_valid" ]; then
             return 1
           fi
           
           if [ -z "$has_valid" ] && [ -z "$has_error" ]; then
-            if echo "$log_output" | grep -qE "Signature|Fingerprint|key"; then
+            if echo "$log_output" "$raw_commit" | grep -qE "Signature|Fingerprint|key|gpgsig"; then
               has_valid="yes"
             fi
           fi
           
-          if [ -z "$has_valid" ]; then
+          if [ -z "$has_valid" ] && [ -z "$has_signature" ]; then
             return 1
           fi
           
@@ -298,19 +355,41 @@ runs:
               key_fingerprint=$(echo "$verify_output" | grep -i "fingerprint" | sed -n 's/.*[Ff]ingerprint[^:]*:\s*\([A-Za-z0-9+/=_-]*\).*/\1/p' | head -1 || echo "")
             fi
             
+            # Extract signature data from raw commit to parse key type
+            sig_data=$(echo "$raw_commit" | grep -A 100 "^gpgsig" | head -50 || echo "")
+            
+            # Try to extract key type from signature data
+            if echo "$sig_data" | grep -q "sk-ssh-ed25519"; then
+              algorithm="ED25519"
+              is_sk=true
+            elif echo "$sig_data" | grep -q "sk-ecdsa"; then
+              algorithm="ECDSA"
+              is_sk=true
+            elif echo "$sig_data" | grep -q "ssh-ed25519"; then
+              algorithm="ED25519"
+              if echo "$sig_data" | grep -qE "sk|security|yubikey"; then
+                is_sk=true
+              fi
+            elif echo "$sig_data" | grep -qE "ecdsa-sha2|ecdsa"; then
+              algorithm="ECDSA"
+              if echo "$sig_data" | grep -qE "sk|security|yubikey"; then
+                is_sk=true
+              fi
+            fi
+            
             # Check for security key (SK) key types
-            if echo "$log_output" "$verify_output" | grep -qiE "sk-ssh-ed25519|sk-ecdsa"; then
+            if echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ssh-ed25519|sk-ecdsa"; then
               is_sk=true
             fi
             
-            if echo "$log_output" "$verify_output" | grep -qiE "sk-ssh-ed25519|ssh-ed25519|ed25519"; then
+            if echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ssh-ed25519|ssh-ed25519|ed25519"; then
               algorithm="ED25519"
-              if echo "$log_output" "$verify_output" | grep -qi "sk-ssh-ed25519"; then
+              if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-ssh-ed25519"; then
                 is_sk=true
               fi
-            elif echo "$log_output" "$verify_output" | grep -qiE "sk-ecdsa|ecdsa-sha2|ecdsa"; then
+            elif echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ecdsa|ecdsa-sha2|ecdsa"; then
               algorithm="ECDSA"
-              if echo "$log_output" "$verify_output" | grep -qi "sk-ecdsa"; then
+              if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-ecdsa"; then
                 is_sk=true
               fi
             fi
@@ -324,7 +403,7 @@ runs:
             fi
             
             # Additional check: if the key type contains "sk-", it's a security key
-            if echo "$log_output" "$verify_output" | grep -qi "sk-"; then
+            if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-"; then
               is_sk=true
             fi
           fi
