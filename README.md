@@ -153,6 +153,7 @@ If you rely on GPG-signed commits, define `gpg-allowed-fingerprints` to limit wh
 
 - Fingerprints are case-insensitive internally, but store them uppercase for clarity.
 - To keep the list transparent, add a tracked file (e.g., `.github/allowed_gpg_fingerprints`) and pass `gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'`.
+- Any surrounding punctuation (parentheses, spaces) is stripped automatically before comparison, so you can copy values directly from `git log --show-signature` output.
 - If the fingerprint cannot be extracted (e.g., key missing on the runner) the action treats it as disallowed.
 - Any GPG commit whose fingerprint is not in the allow list causes the workflow to fail, even when `fail-on-unsigned` is `false`.
 

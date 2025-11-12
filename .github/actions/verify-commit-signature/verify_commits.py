@@ -11,6 +11,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import re
 from typing import Dict, List, Optional, Tuple
 
 
@@ -44,12 +45,20 @@ def _normalize_algorithms(raw: Optional[str]) -> List[str]:
     return [alg.strip() for alg in raw.split(",") if alg.strip()]
 
 
+HEX_RE = re.compile(r"[0-9A-Fa-f]")
+
+
+def _sanitize_fingerprint(value: str) -> str:
+    chars = [c.upper() for c in value if c in "0123456789abcdefABCDEF"]
+    return "".join(chars)
+
+
 def _normalize_fingerprints(raw: Optional[str]) -> List[str]:
     if not raw:
         return []
     normalized: List[str] = []
     for part in raw.replace("\n", ",").split(","):
-        cleaned = part.strip().upper()
+        cleaned = _sanitize_fingerprint(part.strip())
         if cleaned:
             normalized.append(cleaned)
     return normalized
@@ -383,9 +392,8 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
         }
 
     if signature_type == "GPG":
-        fingerprint = (
-            parse_gpg_fingerprint(signature_block) or _fingerprint_from_text(log_text) or ""
-        ).upper()
+        fingerprint_raw = parse_gpg_fingerprint(signature_block) or _fingerprint_from_text(log_text) or ""
+        fingerprint = _sanitize_fingerprint(fingerprint_raw)
         is_allowed = True
         note = "GPG fingerprint extracted without enforcing algorithm"
         if cfg.allowed_gpg_fingerprints:
