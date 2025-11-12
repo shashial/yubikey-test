@@ -129,6 +129,13 @@ dev@example.com sk-ssh-ed25519@openssh.com AAAAE2V...... comment
 
 Without this file GitHub Actions cannot cryptographically verify SSH signatures. The action will still detect the algorithm type and fingerprint, but results will be marked with a warning to highlight that verification was skipped.
 
+### Handling Warning-Only Runs
+
+- If you run the action without configuring an `allowed_signers` file, expect log lines like:
+  `⚠️ <commit> - ED25519-SK ... [SSH signature detected but allowed_signers file missing on runner]`.
+- These warning runs still protect you by detecting the algorithm that was used, but they **do not** cryptographically prove the identity of the signer.
+- Add `ssh-allowed-signers` / `ssh-allowed-signers-file` as soon as possible so merges in downstream repositories fail instead of warn when signatures go missing.
+
 ## 🔐 Setting Up Commit Signing
 
 ### Option 1: SSH Key Signing (Recommended)
