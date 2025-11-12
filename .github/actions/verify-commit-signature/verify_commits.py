@@ -161,20 +161,30 @@ def parse_ssh_signature(block: str) -> Dict[str, str]:
         raise SSHSignatureParseError("missing SSH signature payload")
 
     decoded = base64.b64decode(base64_payload)
-    buf = memoryview(decoded)
-    marker, idx = _read_ssh_string(buf, 0)
-    if marker != b"SSHSIG":
+    if not decoded.startswith(b"SSHSIG"):
         raise SSHSignatureParseError("unexpected SSH signature marker")
 
-    # Skip namespace, reserved, hash algorithm
+    buf = memoryview(decoded)
+    idx = len("SSHSIG")
+    if len(buf) - idx < 4:
+        raise SSHSignatureParseError("truncated SSH signature")
+    version = int.from_bytes(buf[idx : idx + 4], "big")
+    idx += 4
+    if version != 1:
+        raise SSHSignatureParseError(f"unsupported SSH signature version {version}")
+
+    # Read namespace, reserved, hash algorithm
     _, idx = _read_ssh_string(buf, idx)
     _, idx = _read_ssh_string(buf, idx)
     _, idx = _read_ssh_string(buf, idx)
     signature_field, idx = _read_ssh_string(buf, idx)
 
     sig_buf = memoryview(signature_field)
-    key_blob, _ = _read_ssh_string(sig_buf, 0)
-    key_type_raw, _ = _read_ssh_string(memoryview(key_blob), 0)
+    public_key, offset = _read_ssh_string(sig_buf, 0)
+    signature_blob, _ = _read_ssh_string(sig_buf, offset)
+
+    key_buf = memoryview(public_key)
+    key_type_raw, _ = _read_ssh_string(key_buf, 0)
     key_type = key_type_raw.decode("utf-8")
 
     algorithm_map = {
@@ -185,7 +195,7 @@ def parse_ssh_signature(block: str) -> Dict[str, str]:
     }
     algorithm = algorithm_map.get(key_type, key_type.upper())
 
-    fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(key_blob).digest()).decode("ascii").rstrip("=")
+    fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(public_key).digest()).decode("ascii").rstrip("=")
 
     return {
         "key_type": key_type,
