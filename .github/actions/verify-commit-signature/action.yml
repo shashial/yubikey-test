@@ -13,6 +13,14 @@ inputs:
     description: 'Comma-separated list of allowed SSH signature algorithms (default: ED25519-SK,ECDSA-SK)'
     required: false
     default: 'ED25519-SK,ECDSA-SK'
+  gpg-allowed-fingerprints:
+    description: 'Comma/newline-separated list of allowed GPG fingerprints (leave blank to accept any)'
+    required: false
+    default: ''
+  gpg-allowed-fingerprints-file:
+    description: 'Path to a file containing newline-separated GPG fingerprints (combined with inline list)'
+    required: false
+    default: ''
   ssh-allowed-signers:
     description: 'Contents of an allowed_signers file used for ssh signature verification (principal public-key pairs)'
     required: false
@@ -48,9 +56,11 @@ runs:
       env:
         INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
+        INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
         INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
         INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
         INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
+        INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
 
     - name: Verify commits in pull request
       if: github.event_name == 'pull_request'
@@ -60,11 +70,13 @@ runs:
         python3 .github/actions/verify-commit-signature/verify_commits.py range
       env:
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
+        INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
         INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
         INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
         INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
         INPUT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         INPUT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
 
     - name: Verify commits in push
       if: github.event_name == 'push'
@@ -74,8 +86,10 @@ runs:
         python3 .github/actions/verify-commit-signature/verify_commits.py range
       env:
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
+        INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
         INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
         INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
         INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
         INPUT_BASE_SHA: ${{ github.event.before }}
         INPUT_HEAD_SHA: ${{ github.event.after }}
+        INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}

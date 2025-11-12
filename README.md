@@ -41,6 +41,7 @@ jobs:
       - uses: ./.github/actions/verify-commit-signature
         with:
           ssh-allowed-signers-file: '.github/allowed_signers'  # update to match your repo
+          gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'
           fail-on-unsigned: 'true'
           allowed-algorithms: 'ED25519-SK,ECDSA-SK'
 ```
@@ -64,6 +65,8 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
 | `allowed-algorithms` | Comma-separated list of allowed SSH algorithms to enforce | No | `ED25519-SK,ECDSA-SK` |
 | `ssh-allowed-signers` | Inline contents of an `allowed_signers` file (principal + SSH public key pairs). Needed for full SSH verification. | No | `''` |
 | `ssh-allowed-signers-file` | Path to an `allowed_signers` file in your repo (overrides `ssh-allowed-signers`). Needed for full SSH verification. | No | `''` |
+| `gpg-allowed-fingerprints` | Comma/newline separated list of trusted GPG key fingerprints (uppercase). Leave blank to accept any GPG signer. | No | `''` |
+| `gpg-allowed-fingerprints-file` | Path to a file (newline-separated fingerprints) that is combined with `gpg-allowed-fingerprints`. | No | `''` |
 
 ## 📤 Action Outputs
 
@@ -136,6 +139,23 @@ Without this file GitHub Actions cannot cryptographically verify SSH signatures.
 - These warning runs still protect you by detecting the algorithm that was used, but they **do not** cryptographically prove the identity of the signer.
 - Add `ssh-allowed-signers` / `ssh-allowed-signers-file` as soon as possible so merges in downstream repositories fail instead of warn when signatures go missing.
 
+## 🎯 Restricting GPG Signers
+
+If you rely on GPG-signed commits, define `gpg-allowed-fingerprints` to limit which keys are accepted:
+
+```yaml
+- uses: ./.github/actions/verify-commit-signature
+  with:
+    gpg-allowed-fingerprints: |
+      D47C0610BDEAD4D64CAE1917F67E56D797BAD70F
+      ABCDEF0123456789ABCDEF0123456789ABCDEF01
+```
+
+- Fingerprints are case-insensitive internally, but store them uppercase for clarity.
+- To keep the list transparent, add a tracked file (e.g., `.github/allowed_gpg_fingerprints`) and pass `gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'`.
+- If the fingerprint cannot be extracted (e.g., key missing on the runner) the action treats it as disallowed.
+- Any GPG commit whose fingerprint is not in the allow list causes the workflow to fail, even when `fail-on-unsigned` is `false`.
+
 ## 🔐 Setting Up Commit Signing
 
 ### Option 1: SSH Key Signing (Recommended)
@@ -193,6 +213,7 @@ SSH key signing is simpler and works well with hardware security keys:
 - **SSH signatures**: Provide an `allowed_signers` file (see above) for full verification. If it is missing, the action still reports the detected algorithm/fingerprint but marks the result as unverified.
 - **GPG signatures**: The action reports the fingerprint even when the public key is not available on the runner. Import the relevant public keys if you also want cryptographic verification to succeed.
 - Need extra diagnostics? Set the environment variable `SIGNATURE_DEBUG=1` on the step to print detailed parsing logs for troubleshooting.
+- **GPG allow list**: When `gpg-allowed-fingerprints` is set, only those fingerprints are accepted. Missing or mismatched fingerprints fail the workflow.
 
 ## 🤝 License
 

@@ -44,10 +44,23 @@ def _normalize_algorithms(raw: Optional[str]) -> List[str]:
     return [alg.strip() for alg in raw.split(",") if alg.strip()]
 
 
+def _normalize_fingerprints(raw: Optional[str]) -> List[str]:
+    if not raw:
+        return []
+    normalized: List[str] = []
+    for part in raw.replace("\n", ",").split(","):
+        cleaned = part.strip().upper()
+        if cleaned:
+            normalized.append(cleaned)
+    return normalized
+
+
 @dataclasses.dataclass
 class Config:
     commit_sha: str
     allowed_algorithms: List[str]
+    allowed_gpg_fingerprints: List[str]
+    gpg_allowed_fingerprints_file: str
     fail_on_unsigned: bool
     ssh_allowed_signers: str
     ssh_allowed_signers_file: str
@@ -61,6 +74,12 @@ class Config:
             commit_sha=os.environ.get("INPUT_COMMIT_SHA", "HEAD").strip() or "HEAD",
             allowed_algorithms=_normalize_algorithms(
                 os.environ.get("INPUT_ALLOWED_ALGORITHMS", "ED25519-SK,ECDSA-SK")
+            ),
+            allowed_gpg_fingerprints=_normalize_fingerprints(
+                os.environ.get("INPUT_GPG_ALLOWED_FINGERPRINTS", "")
+            ),
+            gpg_allowed_fingerprints_file=os.environ.get(
+                "INPUT_GPG_ALLOWED_FINGERPRINTS_FILE", ""
             ),
             fail_on_unsigned=_to_bool(os.environ.get("INPUT_FAIL_ON_UNSIGNED"), True),
             ssh_allowed_signers=os.environ.get("INPUT_SSH_ALLOWED_SIGNERS", ""),
@@ -113,6 +132,28 @@ def configure_allowed_signers(cfg: Config) -> bool:
         flush=True,
     )
     return False
+
+
+def resolve_allowed_gpg_fingerprints(cfg: Config) -> None:
+    fingerprints = list(cfg.allowed_gpg_fingerprints)
+    file_path = cfg.gpg_allowed_fingerprints_file.strip()
+    if file_path:
+        path = pathlib.Path(file_path).expanduser()
+        if not path.is_file():
+            raise SystemExit(
+                f"Provided gpg-allowed-fingerprints-file '{file_path}' does not exist"
+            )
+        file_contents = path.read_text(encoding="utf-8")
+        fingerprints.extend(_normalize_fingerprints(file_contents))
+
+    deduped: List[str] = []
+    seen = set()
+    for fp in fingerprints:
+        upper = fp.upper()
+        if upper and upper not in seen:
+            deduped.append(upper)
+            seen.add(upper)
+    cfg.allowed_gpg_fingerprints = deduped
 
 
 def extract_signature_block(commit: str) -> str:
@@ -342,16 +383,30 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
         }
 
     if signature_type == "GPG":
-        fingerprint = parse_gpg_fingerprint(signature_block) or _fingerprint_from_text(log_text) or ""
+        fingerprint = (
+            parse_gpg_fingerprint(signature_block) or _fingerprint_from_text(log_text) or ""
+        ).upper()
+        is_allowed = True
+        note = "GPG fingerprint extracted without enforcing algorithm"
+        if cfg.allowed_gpg_fingerprints:
+            if fingerprint:
+                is_allowed = fingerprint in cfg.allowed_gpg_fingerprints
+                if not is_allowed:
+                    note = "GPG fingerprint not in allow list"
+                else:
+                    note = "GPG fingerprint matches allow list"
+            else:
+                is_allowed = False
+                note = "GPG fingerprint missing; cannot compare against allow list"
         return {
             "commit": commit,
             "is_signed": True,
             "signature_type": "GPG",
             "algorithm": "GPG",
             "fingerprint": fingerprint,
-            "is_allowed": True,
+            "is_allowed": is_allowed,
             "verified": verification_ok,
-            "note": "GPG fingerprint extracted without enforcing algorithm",
+            "note": note,
         }
 
     return {
@@ -411,6 +466,12 @@ def handle_single(cfg: Config) -> int:
         )
         return 1
 
+    if result.get("signature_type") == "GPG" and not result.get("is_allowed", False):
+        print(
+            f"❌ {commit} - GPG fingerprint '{result.get('fingerprint') or 'UNKNOWN'}' is not allowed"
+        )
+        return 1
+
     algo = result.get("algorithm", "")
     fingerprint = result.get("fingerprint", "")
     status = "✅"
@@ -451,6 +512,13 @@ def handle_range(cfg: Config) -> int:
             failed = True
             continue
 
+        if result.get("signature_type") == "GPG" and not result.get("is_allowed", False):
+            print(
+                f"❌ {commit} - GPG fingerprint '{result.get('fingerprint') or 'UNKNOWN'}' is not allowed"
+            )
+            failed = True
+            continue
+
         algo = result.get("algorithm", "")
         fingerprint = result.get("fingerprint", "")
         if result.get("signature_type") == "SSH":
@@ -474,6 +542,7 @@ def main() -> int:
         raise SystemExit("Mode argument (single|range) is required")
     mode = sys.argv[1]
     cfg = Config.from_env()
+    resolve_allowed_gpg_fingerprints(cfg)
     cfg.ssh_verification_ready = configure_allowed_signers(cfg)
 
     if mode == "single":
