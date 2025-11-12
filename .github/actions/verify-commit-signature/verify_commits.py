@@ -217,9 +217,8 @@ def parse_gpg_fingerprint(block: str) -> Optional[str]:
     return None
 
 
-def extract_log_fingerprint(commit: str) -> Optional[str]:
-    log = _read_git_output(["log", "--show-signature", "-1", commit])
-    combined = f"{log.stdout}\n{log.stderr}".splitlines()
+def _fingerprint_from_text(text: str) -> Optional[str]:
+    combined = text.splitlines()
     for line in combined:
         if "fingerprint" in line.lower():
             parts = line.split(":", 1)
@@ -233,6 +232,25 @@ def _allowed_signers_error(output: str) -> bool:
     return "allowedsignersfile" in lowered or "allowed signers" in lowered
 
 
+def infer_ssh_from_text(signature_block: str, log_text: str) -> Optional[Dict[str, str]]:
+    combined = f"{signature_block}\n{log_text}".lower()
+    algorithm = ""
+    if "sk-ssh-ed25519" in combined:
+        algorithm = "ED25519-SK"
+    elif "sk-ecdsa" in combined:
+        algorithm = "ECDSA-SK"
+    elif "ssh-ed25519" in combined:
+        algorithm = "ED25519"
+    elif "ecdsa-sha2" in combined or "ecdsa" in combined:
+        algorithm = "ECDSA"
+
+    if not algorithm:
+        return None
+
+    fingerprint = _fingerprint_from_text(log_text) or ""
+    return {"algorithm": algorithm, "fingerprint": fingerprint}
+
+
 def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
     signature_block = extract_signature_block(commit)
     if not signature_block:
@@ -241,6 +259,9 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
             "is_signed": False,
             "reason": "Commit has no signature data",
         }
+
+    log_proc = _read_git_output(["log", "--show-signature", "-1", commit])
+    log_text = f"{log_proc.stdout}\n{log_proc.stderr}"
 
     signature_type = detect_signature_type(signature_block)
     verify_proc = _read_git_output(["verify-commit", commit])
@@ -251,12 +272,15 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
         try:
             ssh_info = parse_ssh_signature(signature_block)
         except SSHSignatureParseError as exc:
-            return {
-                "commit": commit,
-                "is_signed": False,
-                "reason": str(exc),
-                "signature_type": "SSH",
-            }
+            fallback = infer_ssh_from_text(signature_block, log_text)
+            if not fallback:
+                return {
+                    "commit": commit,
+                    "is_signed": False,
+                    "reason": str(exc),
+                    "signature_type": "SSH",
+                }
+            ssh_info = fallback
 
         algorithm = ssh_info["algorithm"]
         is_allowed = algorithm in cfg.allowed_algorithms if cfg.allowed_algorithms else True
@@ -281,14 +305,14 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
             "is_signed": True,
             "signature_type": "SSH",
             "algorithm": algorithm,
-            "fingerprint": ssh_info["fingerprint"],
+            "fingerprint": ssh_info.get("fingerprint", ""),
             "is_allowed": is_allowed,
             "verified": verified,
             "note": note,
         }
 
     if signature_type == "GPG":
-        fingerprint = parse_gpg_fingerprint(signature_block) or extract_log_fingerprint(commit) or ""
+        fingerprint = parse_gpg_fingerprint(signature_block) or _fingerprint_from_text(log_text) or ""
         return {
             "commit": commit,
             "is_signed": True,
