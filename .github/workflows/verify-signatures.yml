@@ -21,4 +21,5 @@ jobs:
         with:
           fail-on-unsigned: 'true'
           allowed-algorithms: 'ED25519-SK,ECDSA-SK'
+          gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'
 
