@@ -45,6 +45,7 @@ class Config:
     ssh_allowed_signers_file: str
     base_sha: str
     head_sha: str
+    ssh_verification_ready: bool = False
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -61,8 +62,14 @@ class Config:
         )
 
 
-def configure_allowed_signers(cfg: Config) -> None:
-    """Configure git to use the provided allowed signers file/content for SSH signatures."""
+def configure_allowed_signers(cfg: Config) -> bool:
+    """Configure git to use an allowed_signers file if one is available."""
+
+    def set_allowed_signers(path: pathlib.Path) -> None:
+        subprocess.run(
+            ["git", "config", "--global", "gpg.ssh.allowedSignersFile", str(path)],
+            check=True,
+        )
 
     if cfg.ssh_allowed_signers_file:
         path = pathlib.Path(cfg.ssh_allowed_signers_file).expanduser()
@@ -70,24 +77,34 @@ def configure_allowed_signers(cfg: Config) -> None:
             raise SystemExit(
                 f"Provided ssh-allowed-signers-file '{cfg.ssh_allowed_signers_file}' does not exist"
             )
-        subprocess.run(
-            ["git", "config", "--global", "gpg.ssh.allowedSignersFile", str(path.resolve())],
-            check=True,
-        )
-        return
+        set_allowed_signers(path.resolve())
+        return True
 
-    content = cfg.ssh_allowed_signers
-    if not content.strip():
-        return
+    content = cfg.ssh_allowed_signers.strip()
+    if content:
+        temp_dir = pathlib.Path(os.environ.get("RUNNER_TEMP", tempfile.mkdtemp()))
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        file_path = temp_dir / "allowed_signers"
+        file_path.write_text(content, encoding="utf-8")
+        set_allowed_signers(file_path)
+        return True
 
-    temp_dir = pathlib.Path(os.environ.get("RUNNER_TEMP", tempfile.mkdtemp()))
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    file_path = temp_dir / "allowed_signers"
-    file_path.write_text(content, encoding="utf-8")
-    subprocess.run(
-        ["git", "config", "--global", "gpg.ssh.allowedSignersFile", str(file_path)],
-        check=True,
+    existing = subprocess.run(
+        ["git", "config", "--global", "--get", "gpg.ssh.allowedSignersFile"],
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    if existing.returncode == 0:
+        candidate = existing.stdout.strip()
+        if candidate and pathlib.Path(candidate).expanduser().is_file():
+            return True
+
+    print(
+        "⚠️  No ssh allowed_signers file configured; SSH signatures will be detected but not fully verified.",
+        flush=True,
+    )
+    return False
 
 
 def extract_signature_block(commit: str) -> str:
@@ -211,6 +228,11 @@ def extract_log_fingerprint(commit: str) -> Optional[str]:
     return None
 
 
+def _allowed_signers_error(output: str) -> bool:
+    lowered = output.lower()
+    return "allowedsignersfile" in lowered or "allowed signers" in lowered
+
+
 def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
     signature_block = extract_signature_block(commit)
     if not signature_block:
@@ -226,14 +248,6 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
     verify_output = (verify_proc.stdout + verify_proc.stderr).strip()
 
     if signature_type == "SSH":
-        if not verification_ok:
-            reason = verify_output or "git verify-commit failed for SSH signature"
-            return {
-                "commit": commit,
-                "is_signed": False,
-                "reason": reason,
-                "signature_type": "SSH",
-            }
         try:
             ssh_info = parse_ssh_signature(signature_block)
         except SSHSignatureParseError as exc:
@@ -246,6 +260,22 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
 
         algorithm = ssh_info["algorithm"]
         is_allowed = algorithm in cfg.allowed_algorithms if cfg.allowed_algorithms else True
+        verified = verification_ok
+        note = ""
+
+        if not verification_ok:
+            if not cfg.ssh_verification_ready or _allowed_signers_error(verify_output):
+                verified = False
+                note = "SSH signature detected but allowed_signers file missing on runner"
+            else:
+                reason = verify_output or "git verify-commit failed for SSH signature"
+                return {
+                    "commit": commit,
+                    "is_signed": False,
+                    "reason": reason,
+                    "signature_type": "SSH",
+                }
+
         return {
             "commit": commit,
             "is_signed": True,
@@ -253,7 +283,8 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
             "algorithm": algorithm,
             "fingerprint": ssh_info["fingerprint"],
             "is_allowed": is_allowed,
-            "verified": verification_ok,
+            "verified": verified,
+            "note": note,
         }
 
     if signature_type == "GPG":
@@ -328,10 +359,21 @@ def handle_single(cfg: Config) -> int:
 
     algo = result.get("algorithm", "")
     fingerprint = result.get("fingerprint", "")
+    status = "✅"
+    if result.get("signature_type") == "SSH" and not result.get("verified"):
+        status = "⚠️"
+    elif result.get("signature_type") == "GPG" and not result.get("verified"):
+        status = "ℹ️"
+
     if algo:
-        print(f"✅ {commit} - Algorithm: {algo} Fingerprint: {fingerprint}")
+        line = f"{status} {commit} - Algorithm: {algo}"
     else:
-        print(f"✅ {commit} - Signed (fingerprint: {fingerprint})")
+        line = f"{status} {commit} - Signed"
+    if fingerprint:
+        line += f" (fingerprint: {fingerprint})"
+    if result.get("note"):
+        line += f" [{result['note']}]"
+    print(line)
     return 0
 
 
@@ -357,12 +399,17 @@ def handle_range(cfg: Config) -> int:
 
         algo = result.get("algorithm", "")
         fingerprint = result.get("fingerprint", "")
-        prefix = "✅" if result.get("signature_type") == "SSH" else "ℹ️"
+        if result.get("signature_type") == "SSH":
+            prefix = "✅" if result.get("verified") else "⚠️"
+        else:
+            prefix = "ℹ️"
         message = f"{prefix} {commit} - {algo or 'Signed'}"
         if fingerprint:
             message += f" (fingerprint: {fingerprint})"
         if result.get("signature_type") == "GPG" and not result.get("verified"):
             message += " [not verified - missing public key?]"
+        if result.get("note"):
+            message += f" [{result['note']}]"
         print(message)
 
     return 1 if failed else 0
@@ -373,7 +420,7 @@ def main() -> int:
         raise SystemExit("Mode argument (single|range) is required")
     mode = sys.argv[1]
     cfg = Config.from_env()
-    configure_allowed_signers(cfg)
+    cfg.ssh_verification_ready = configure_allowed_signers(cfg)
 
     if mode == "single":
         return handle_single(cfg)
