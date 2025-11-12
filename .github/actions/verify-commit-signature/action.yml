@@ -1,606 +1,81 @@
 name: 'Verify Commit Signature'
-description: 'Verifies that commits are signed with ED25519-SK or ECDSA-SK algorithm'
+description: 'Verifies that commits are signed with ED25519-SK or ECDSA-SK algorithm (SSH) or records GPG fingerprints'
 inputs:
   commit-sha:
     description: 'Commit SHA to verify (defaults to HEAD)'
     required: false
     default: 'HEAD'
   fail-on-unsigned:
-    description: 'Fail if commit is not signed'
+    description: 'Fail if a commit is not signed'
     required: false
     default: 'true'
   allowed-algorithms:
-    description: 'Comma-separated list of allowed algorithms (ED25519-SK,ECDSA-SK)'
+    description: 'Comma-separated list of allowed SSH signature algorithms (default: ED25519-SK,ECDSA-SK)'
     required: false
     default: 'ED25519-SK,ECDSA-SK'
+  ssh-allowed-signers:
+    description: 'Contents of an allowed_signers file used for ssh signature verification (principal public-key pairs)'
+    required: false
+    default: ''
+  ssh-allowed-signers-file:
+    description: 'Path to an allowed_signers file checked into the repo (overrides ssh-allowed-signers)'
+    required: false
+    default: ''
 
 outputs:
   is-signed:
-    description: 'Whether the commit is signed'
-    value: ${{ steps.verify.outputs.is-signed }}
+    description: 'Whether the requested commit is signed'
+    value: ${{ steps.verify_single.outputs.is-signed }}
   algorithm:
-    description: 'The signature algorithm used'
-    value: ${{ steps.verify.outputs.algorithm }}
+    description: 'The signature algorithm detected for the requested commit'
+    value: ${{ steps.verify_single.outputs.algorithm }}
   is-allowed:
-    description: 'Whether the signature uses an allowed algorithm'
-    value: ${{ steps.verify.outputs.is-allowed }}
+    description: 'Whether the signature algorithm is allowed (SSH signatures only)'
+    value: ${{ steps.verify_single.outputs.is-allowed }}
   fingerprint:
-    description: 'Fingerprint of the signing key (if available)'
-    value: ${{ steps.verify.outputs.fingerprint }}
+    description: 'Detected fingerprint (SSH key fingerprint or GPG fingerprint)'
+    value: ${{ steps.verify_single.outputs.fingerprint }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Verify commit signature
-      id: verify
+    - name: Verify requested commit
+      id: verify_single
       shell: bash
       run: |
-        COMMIT_SHA="${{ inputs.commit-sha }}"
-        ALLOWED_ALGOS="${{ inputs.allowed-algorithms }}"
-        DETECTED_FINGERPRINT=""
-        
-        # Function to check commit signature and determine algorithm
-        check_commit() {
-          local commit=$1
-          local verify_output
-          local log_output
-          local key_id
-          local key_fingerprint
-          local fingerprint=""
-          local algorithm=""
-          local is_sk=false
-          local signature_type=""
-          
-          # Get both verify and log output
-          verify_output=$(git verify-commit "$commit" 2>&1 || true)
-          log_output=$(git log --show-signature -1 "$commit" 2>&1 || echo "")
-          
-          # Also get raw commit data to extract signature
-          raw_commit=$(git show "$commit" --format=raw --no-patch 2>&1 || echo "")
-          
-          # Check if commit has a signature in the raw data
-          has_signature=$(echo "$raw_commit" | grep -E "^gpgsig" || echo "")
-          
-          if [ -z "$has_signature" ]; then
-            # No signature found
-            return 1
-          fi
-          
-          # Check if commit is signed (either GPG or SSH)
-          # For SSH, git verify-commit might fail due to missing allowedSignersFile
-          # but we can still extract signature info from the commit object
-          has_error=$(echo "$verify_output" | grep -iE "error.*allowedSignersFile|invalid|bad" || true)
-          has_valid=$(echo "$verify_output" "$log_output" | grep -iE "Good signature|Valid|SSH Key Fingerprint" || true)
-          
-          # If we have a signature in the commit but verification failed due to allowedSignersFile,
-          # we can still proceed to extract algorithm info
-          if [ -n "$has_error" ] && echo "$has_error" | grep -qi "allowedSignersFile"; then
-            # SSH signature exists but can't verify - we'll extract from signature data
-            has_valid="ssh_signature_present"
-          elif [ -n "$has_error" ] && [ -z "$has_valid" ]; then
-            return 1
-          fi
-          
-          # If verify-commit succeeded (exit 0) and we have signature info, consider it signed
-          if [ -z "$has_valid" ] && [ -z "$has_error" ]; then
-            # Check if there's any signature information at all
-            if echo "$log_output" "$raw_commit" | grep -qE "Signature|Fingerprint|key|gpgsig"; then
-              has_valid="yes"
-            fi
-          fi
-          
-          if [ -z "$has_valid" ] && [ -z "$has_signature" ]; then
-            return 1
-          fi
-          
-          # Determine signature type: SSH or GPG
-          if echo "$log_output" "$verify_output" | grep -qiE "SSH|ssh-ed25519|ecdsa-sha2|SSH Key Fingerprint"; then
-            signature_type="SSH"
-          elif echo "$log_output" "$verify_output" | grep -qiE "GPG|gpg|Good signature"; then
-            signature_type="GPG"
-          fi
-          
-          # Handle SSH key signatures
-          if [ "$signature_type" = "SSH" ]; then
-            # Extract SSH key fingerprint from log output
-            # Format: "SSH Key Fingerprint: qb64Ay4dOcFceVDxo1a4wrNTtZOufTpOaQ+Qx4lLBCE"
-            key_fingerprint=$(echo "$log_output" | grep -i "SSH.*Fingerprint" | sed -n 's/.*Fingerprint[^:]*:\s*\([A-Za-z0-9+/=_-]*\).*/\1/p' | head -1 || echo "")
-            
-            # Also try to get from verify output
-            if [ -z "$key_fingerprint" ]; then
-              key_fingerprint=$(echo "$verify_output" | grep -i "fingerprint" | sed -n 's/.*[Ff]ingerprint[^:]*:\s*\([A-Za-z0-9+/=_-]*\).*/\1/p' | head -1 || echo "")
-            fi
-            
-            fingerprint="$key_fingerprint"
-            
-            # Extract signature data from raw commit to parse key type
-            # SSH signatures in git commits contain the key type in the signature blob
-            # The signature is base64 encoded, so we need to check both raw and decoded
-            sig_data=$(echo "$raw_commit" | grep -A 100 "^gpgsig" | head -50 || echo "")
-            
-            # Decode the base64 signature to check for key type
-            # Extract just the base64 part (between BEGIN and END markers)
-            sig_base64=$(echo "$sig_data" | grep -v "BEGIN\|END\|gpgsig" | tr -d ' \n' || echo "")
-            
-            # Try to decode and check (but also check base64 directly)
-            # Base64 encoding of "sk-ssh-ed25519@openssh.com" contains patterns we can detect
-            # The base64 string "c2stc3NoLWVkMjU1MTlAb3BlbnNzaC5jb20" decodes to "sk-ssh-ed25519@openssh.com"
-            if [ -n "$sig_base64" ]; then
-              # Try to decode the signature (first part contains key type info)
-              # We can check the base64 string directly for encoded patterns
-              sig_decoded=$(echo "$sig_base64" | base64 -d 2>/dev/null | strings 2>/dev/null | head -20 || echo "")
-            else
-              sig_decoded=""
-            fi
-            
-            # Check decoded signature first (most reliable)
-            if echo "$sig_decoded" | grep -q "sk-ssh-ed25519"; then
-              algorithm="ED25519"
-              is_sk=true
-            elif echo "$sig_decoded" | grep -q "sk-ecdsa"; then
-              algorithm="ECDSA"
-              is_sk=true
-            elif echo "$sig_decoded" | grep -q "ssh-ed25519"; then
-              algorithm="ED25519"
-            elif echo "$sig_decoded" | grep -qE "ecdsa-sha2|ecdsa"; then
-              algorithm="ECDSA"
-            fi
-            
-            # Also check base64 encoded string for patterns
-            # "c2stc3NoLWVkMjU1MTlA" is base64 for "sk-ssh-ed25519@"
-            if echo "$sig_base64" | grep -qE "c2stc3NoLWVkMjU1MTlA|YzJrLWMzc0gtZWQyNTUxOUB"; then
-              algorithm="ED25519"
-              is_sk=true
-              if [ -z "$fingerprint" ]; then
-                fingerprint="$key_fingerprint"
-              fi
-            elif echo "$sig_base64" | grep -qE "c2stZWNkc2E|YzJrLWVjZHNh"; then
-              algorithm="ECDSA"
-              is_sk=true
-              if [ -z "$fingerprint" ]; then
-                fingerprint="$key_fingerprint"
-              fi
-            fi
-            
-            # Check raw signature data (might have some readable parts)
-            if echo "$sig_data" | grep -q "sk-ssh-ed25519"; then
-              algorithm="ED25519"
-              is_sk=true
-              if [ -z "$fingerprint" ]; then
-                fingerprint="$key_fingerprint"
-              fi
-            elif echo "$sig_data" | grep -q "sk-ecdsa"; then
-              algorithm="ECDSA"
-              is_sk=true
-              if [ -z "$fingerprint" ]; then
-                fingerprint="$key_fingerprint"
-              fi
-            elif echo "$sig_data" | grep -q "ssh-ed25519"; then
-              algorithm="ED25519"
-              if [ -z "$fingerprint" ]; then
-                fingerprint="$key_fingerprint"
-              fi
-            elif echo "$sig_data" | grep -qE "ecdsa-sha2|ecdsa"; then
-              algorithm="ECDSA"
-              if [ -z "$fingerprint" ]; then
-                fingerprint="$key_fingerprint"
-              fi
-            fi
-            
-            # Check for security key (SK) key types in the output
-            # Security keys use: sk-ssh-ed25519@openssh.com or sk-ecdsa-sha2-nistp256@openssh.com
-            if echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ssh-ed25519|sk-ecdsa"; then
-              is_sk=true
-            fi
-            
-            # Check key type from log output
-            if echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ssh-ed25519|ssh-ed25519|ed25519"; then
-              algorithm="ED25519"
-              # If we found sk-ssh-ed25519, it's definitely a security key
-              if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-ssh-ed25519"; then
-                is_sk=true
-              fi
-            elif echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ecdsa|ecdsa-sha2|ecdsa"; then
-              algorithm="ECDSA"
-              # If we found sk-ecdsa, it's definitely a security key
-              if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-ecdsa"; then
-                is_sk=true
-              fi
-            fi
-            
-            # If we have a fingerprint but no algorithm, try to determine from fingerprint length/format
-            if [ -z "$algorithm" ] && [ -n "$key_fingerprint" ]; then
-              # ED25519 fingerprints are typically 43-44 base64 chars
-              if [ ${#key_fingerprint} -ge 40 ] && [ ${#key_fingerprint} -le 44 ]; then
-                algorithm="ED25519"
-              # ECDSA fingerprints vary but are usually longer
-              elif [ ${#key_fingerprint} -gt 44 ]; then
-                algorithm="ECDSA"
-              fi
-            fi
-            
-            # Additional check: if the key type contains "sk-" anywhere, it's a security key
-            if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-"; then
-              is_sk=true
-            fi
-            
-          fi
-          
-          # Handle GPG signatures
-          if [ "$signature_type" = "GPG" ] || [ -z "$signature_type" ]; then
-            # Extract key ID
-            key_id=$(echo "$verify_output" | grep -oP '(?<=using )\S+(?= key)' | head -1 || echo "")
-            
-            if [ -z "$key_id" ]; then
-              key_id=$(echo "$log_output" | grep -oP '(?<=key ID )\S+' | head -1 || echo "")
-            fi
-            
-            # Get key information
-            if [ -n "$key_id" ]; then
-              key_info=$(gpg --list-keys --with-colons "$key_id" 2>/dev/null || echo "")
-              
-              if [ -n "$key_info" ]; then
-                algo_code=$(echo "$key_info" | grep "^pub:" | cut -d: -f4 || echo "")
-                if [ -z "$fingerprint" ]; then
-                  fingerprint=$(echo "$key_info" | grep "^fpr:" | head -1 | cut -d: -f10 || echo "")
-                fi
-                
-                case "$algo_code" in
-                  22) algorithm="ED25519" ;;
-                  19|18|25) algorithm="ECDSA" ;;
-                esac
-                
-                full_key_list=$(gpg --list-keys --with-keygrip "$key_id" 2>/dev/null || echo "")
-                
-                if echo "$full_key_list" | grep -qiE "\[.*S.*\]|card|security|yubikey|sk"; then
-                  is_sk=true
-                fi
-                
-                if echo "$verify_output" | grep -qiE "card|security|yubikey|sk"; then
-                  is_sk=true
-                fi
-              fi
-            fi
-            
-            # Fallback: check log/verify output for algorithm mentions
-            if [ -z "$algorithm" ]; then
-              if echo "$log_output" "$verify_output" | grep -qi "ed25519"; then
-                algorithm="ED25519"
-                if echo "$log_output" "$verify_output" | grep -qiE "sk|card|security|yubikey"; then
-                  is_sk=true
-                fi
-              elif echo "$log_output" "$verify_output" | grep -qi "ecdsa"; then
-                algorithm="ECDSA"
-                if echo "$log_output" "$verify_output" | grep -qiE "sk|card|security|yubikey"; then
-                  is_sk=true
-                fi
-              fi
-            fi
-          fi
-          
-          # Add SK suffix if it's a security key
-          if [ "$is_sk" = true ] && [ -n "$algorithm" ]; then
-            algorithm="${algorithm}-SK"
-          fi
-          
-          if [ -z "$fingerprint" ]; then
-            fingerprint=$(echo "$log_output" | grep -i "fingerprint" | head -1 | sed -E 's/.*fingerprint[: ]*//I' | tr -d ' ' || echo "")
-          fi
-          
-          DETECTED_FINGERPRINT="$fingerprint"
-          
-          # Return algorithm or empty if not found
-          # IMPORTANT: Only output the algorithm to stdout, all debug goes to stderr
-          if [ -n "$algorithm" ]; then
-            # Output ONLY the algorithm to stdout (will be captured)
-            # Use printf instead of echo to avoid any issues
-            printf '%s\n' "$algorithm"
-            return 0
-          else
-            return 1
-          fi
-        }
-        
-        # Verify the commit
-        # Capture only stdout (algorithm), stderr (debug) goes to console
-        # Set up file descriptor 3 to point to stderr, then redirect stderr there during capture
-        exec 3>&2
-        ALGORITHM=$({ check_commit "$COMMIT_SHA"; } 2>&3)
-        CHECK_EXIT=$?
-        exec 3>&-
-        
-        if [ $CHECK_EXIT -ne 0 ] || [ -z "$ALGORITHM" ]; then
-          echo "is-signed=false" >> $GITHUB_OUTPUT
-          echo "algorithm=" >> $GITHUB_OUTPUT
-          echo "is-allowed=false" >> $GITHUB_OUTPUT
-          echo "fingerprint=" >> $GITHUB_OUTPUT
-          
-          if [ "${{ inputs.fail-on-unsigned }}" == "true" ]; then
-            echo "❌ Commit $COMMIT_SHA is not signed or signature could not be verified"
-            exit 1
-          else
-            echo "⚠️  Commit $COMMIT_SHA is not signed (non-fatal)"
-            exit 0
-          fi
-        fi
-        
-        # Check if algorithm is in allowed list
-        IS_ALLOWED="false"
-        IFS=',' read -ra ALGO_ARRAY <<< "$ALLOWED_ALGOS"
-        for algo in "${ALGO_ARRAY[@]}"; do
-          algo_trimmed=$(echo "$algo" | xargs)
-          if [ "$ALGORITHM" == "$algo_trimmed" ]; then
-            IS_ALLOWED="true"
-            break
-          fi
-        done
-        
-        echo "is-signed=true" >> $GITHUB_OUTPUT
-        echo "algorithm=$ALGORITHM" >> $GITHUB_OUTPUT
-        echo "is-allowed=$IS_ALLOWED" >> $GITHUB_OUTPUT
-        echo "fingerprint=$DETECTED_FINGERPRINT" >> $GITHUB_OUTPUT
-        
-        if [ "$IS_ALLOWED" = "false" ]; then
-          echo "❌ Commit $COMMIT_SHA is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
-          exit 1
-        fi
-        
-        echo "✅ Commit $COMMIT_SHA is signed with allowed algorithm: $ALGORITHM"
+        set -euo pipefail
+        python3 .github/actions/verify-commit-signature/verify_commits.py single
+      env:
+        INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
+        INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
+        INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
+        INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
+        INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
 
-    - name: Verify all commits in PR/push
-      if: github.event_name == 'pull_request' || github.event_name == 'push'
+    - name: Verify commits in pull request
+      if: github.event_name == 'pull_request'
       shell: bash
       run: |
-        # Function to check commit (same as above)
-        check_commit() {
-          local commit=$1
-          local verify_output
-          local log_output
-          local key_id
-          local key_fingerprint
-          local algorithm=""
-          local is_sk=false
-          local signature_type=""
-          
-          verify_output=$(git verify-commit "$commit" 2>&1 || true)
-          log_output=$(git log --show-signature -1 "$commit" 2>&1 || echo "")
-          
-          # Also get raw commit data to extract signature
-          raw_commit=$(git show "$commit" --format=raw --no-patch 2>&1 || echo "")
-          
-          # Check if commit has a signature in the raw data
-          has_signature=$(echo "$raw_commit" | grep -E "^gpgsig" || echo "")
-          
-          if [ -z "$has_signature" ]; then
-            return 1
-          fi
-          
-          # Check if commit is signed
-          has_error=$(echo "$verify_output" | grep -iE "error.*allowedSignersFile|invalid|bad" || true)
-          has_valid=$(echo "$verify_output" "$log_output" | grep -iE "Good signature|Valid|SSH Key Fingerprint" || true)
-          
-          # If we have a signature in the commit but verification failed due to allowedSignersFile,
-          # we can still proceed to extract algorithm info
-          if [ -n "$has_error" ] && echo "$has_error" | grep -qi "allowedSignersFile"; then
-            has_valid="ssh_signature_present"
-          elif [ -n "$has_error" ] && [ -z "$has_valid" ]; then
-            return 1
-          fi
-          
-          if [ -z "$has_valid" ] && [ -z "$has_error" ]; then
-            if echo "$log_output" "$raw_commit" | grep -qE "Signature|Fingerprint|key|gpgsig"; then
-              has_valid="yes"
-            fi
-          fi
-          
-          if [ -z "$has_valid" ] && [ -z "$has_signature" ]; then
-            return 1
-          fi
-          
-          if echo "$log_output" "$verify_output" | grep -qiE "SSH|ssh-ed25519|ecdsa-sha2|SSH Key Fingerprint"; then
-            signature_type="SSH"
-          elif echo "$log_output" "$verify_output" | grep -qiE "GPG|gpg|Good signature"; then
-            signature_type="GPG"
-          fi
-          
-          if [ "$signature_type" = "SSH" ]; then
-            key_fingerprint=$(echo "$log_output" | grep -i "SSH.*Fingerprint" | sed -n 's/.*Fingerprint[^:]*:\s*\([A-Za-z0-9+/=_-]*\).*/\1/p' | head -1 || echo "")
-            
-            if [ -z "$key_fingerprint" ]; then
-              key_fingerprint=$(echo "$verify_output" | grep -i "fingerprint" | sed -n 's/.*[Ff]ingerprint[^:]*:\s*\([A-Za-z0-9+/=_-]*\).*/\1/p' | head -1 || echo "")
-            fi
-            
-            # Extract signature data from raw commit to parse key type
-            sig_data=$(echo "$raw_commit" | grep -A 100 "^gpgsig" | head -50 || echo "")
-            
-            # Decode the base64 signature to check for key type
-            sig_base64=$(echo "$sig_data" | grep -v "BEGIN\|END\|gpgsig" | tr -d ' \n' || echo "")
-            
-            if [ -n "$sig_base64" ]; then
-              sig_decoded=$(echo "$sig_base64" | base64 -d 2>/dev/null | strings 2>/dev/null | head -20 || echo "")
-            else
-              sig_decoded=""
-            fi
-            
-            # Check decoded signature first
-            if echo "$sig_decoded" | grep -q "sk-ssh-ed25519"; then
-              algorithm="ED25519"
-              is_sk=true
-            elif echo "$sig_decoded" | grep -q "sk-ecdsa"; then
-              algorithm="ECDSA"
-              is_sk=true
-            elif echo "$sig_decoded" | grep -q "ssh-ed25519"; then
-              algorithm="ED25519"
-            elif echo "$sig_decoded" | grep -qE "ecdsa-sha2|ecdsa"; then
-              algorithm="ECDSA"
-            fi
-            
-            # Check base64 encoded string for patterns
-            if echo "$sig_base64" | grep -qE "c2stc3NoLWVkMjU1MTlA|YzJrLWMzc0gtZWQyNTUxOUB"; then
-              algorithm="ED25519"
-              is_sk=true
-            elif echo "$sig_base64" | grep -qE "c2stZWNkc2E|YzJrLWVjZHNh"; then
-              algorithm="ECDSA"
-              is_sk=true
-            fi
-            
-            # Check raw signature data
-            if echo "$sig_data" | grep -q "sk-ssh-ed25519"; then
-              algorithm="ED25519"
-              is_sk=true
-            elif echo "$sig_data" | grep -q "sk-ecdsa"; then
-              algorithm="ECDSA"
-              is_sk=true
-            elif echo "$sig_data" | grep -q "ssh-ed25519"; then
-              algorithm="ED25519"
-            elif echo "$sig_data" | grep -qE "ecdsa-sha2|ecdsa"; then
-              algorithm="ECDSA"
-            fi
-            
-            # Check for security key (SK) key types
-            if echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ssh-ed25519|sk-ecdsa"; then
-              is_sk=true
-            fi
-            
-            if echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ssh-ed25519|ssh-ed25519|ed25519"; then
-              algorithm="ED25519"
-              if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-ssh-ed25519"; then
-                is_sk=true
-              fi
-            elif echo "$log_output" "$verify_output" "$sig_data" | grep -qiE "sk-ecdsa|ecdsa-sha2|ecdsa"; then
-              algorithm="ECDSA"
-              if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-ecdsa"; then
-                is_sk=true
-              fi
-            fi
-            
-            if [ -z "$algorithm" ] && [ -n "$key_fingerprint" ]; then
-              if [ ${#key_fingerprint} -ge 40 ] && [ ${#key_fingerprint} -le 44 ]; then
-                algorithm="ED25519"
-              elif [ ${#key_fingerprint} -gt 44 ]; then
-                algorithm="ECDSA"
-              fi
-            fi
-            
-            # Additional check: if the key type contains "sk-", it's a security key
-            if echo "$log_output" "$verify_output" "$sig_data" | grep -qi "sk-"; then
-              is_sk=true
-            fi
-          fi
-          
-          if [ "$signature_type" = "GPG" ] || [ -z "$signature_type" ]; then
-            key_id=$(echo "$verify_output" | grep -oP '(?<=using )\S+(?= key)' | head -1 || echo "")
-            
-            if [ -z "$key_id" ]; then
-              key_id=$(echo "$log_output" | grep -oP '(?<=key ID )\S+' | head -1 || echo "")
-            fi
-            
-            if [ -n "$key_id" ]; then
-              key_info=$(gpg --list-keys --with-colons "$key_id" 2>/dev/null || echo "")
-              
-              if [ -n "$key_info" ]; then
-                algo_code=$(echo "$key_info" | grep "^pub:" | cut -d: -f4 || echo "")
-                
-                case "$algo_code" in
-                  22) algorithm="ED25519" ;;
-                  19|18|25) algorithm="ECDSA" ;;
-                esac
-                
-                full_key_list=$(gpg --list-keys --with-keygrip "$key_id" 2>/dev/null || echo "")
-                
-                if echo "$full_key_list" | grep -qiE "\[.*S.*\]|card|security|yubikey|sk"; then
-                  is_sk=true
-                fi  
-                
-                if echo "$verify_output" | grep -qiE "card|security|yubikey|sk"; then
-                  is_sk=true
-                fi
-              fi
-            fi
-            
-            if [ -z "$algorithm" ]; then
-              if echo "$log_output" "$verify_output" | grep -qi "ed25519"; then
-                algorithm="ED25519"
-                if echo "$log_output" "$verify_output" | grep -qiE "sk|card|security|yubikey"; then
-                  is_sk=true
-                fi
-              elif echo "$log_output" "$verify_output" | grep -qi "ecdsa"; then
-                algorithm="ECDSA"
-                if echo "$log_output" "$verify_output" | grep -qiE "sk|card|security|yubikey"; then
-                  is_sk=true
-                fi
-              fi
-            fi
-          fi
-          
-          if [ "$is_sk" = true ] && [ -n "$algorithm" ]; then
-            algorithm="${algorithm}-SK"
-          fi
-          
-          if [ -n "$algorithm" ]; then
-            echo "$algorithm"
-            return 0
-          else
-            return 1
-          fi
-        }
-        
-        if [ "${{ github.event_name }}" == "pull_request" ]; then
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-        else
-          BASE_SHA="${{ github.event.before }}"
-          HEAD_SHA="${{ github.event.after }}"
-        fi
-        
-        # Get list of commits to verify
-        if [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ] && [ -n "$BASE_SHA" ]; then
-          COMMITS=$(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA" 2>/dev/null || echo "")
-        else
-          COMMITS="$HEAD_SHA"
-        fi
-        
-        if [ -z "$COMMITS" ]; then
-          echo "No commits to verify"
-          exit 0
-        fi
-        
-        FAILED=0
-        ALLOWED_ALGOS="${{ inputs.allowed-algorithms }}"
-        
-        for COMMIT in $COMMITS; do
-          echo "Checking commit $COMMIT..."
-          
-          # Capture only stdout, let stderr (debug) go through
-          exec 3>&2
-          ALGORITHM=$({ check_commit "$COMMIT"; } 2>&3)
-          CHECK_EXIT=$?
-          exec 3>&-
-          
-          if [ $CHECK_EXIT -ne 0 ] || [ -z "$ALGORITHM" ]; then
-            echo "❌ Commit $COMMIT is not signed or signature could not be verified"
-            FAILED=1
-            continue
-          fi
-          
-          IS_ALLOWED="false"
-          IFS=',' read -ra ALGO_ARRAY <<< "$ALLOWED_ALGOS"
-          for algo in "${ALGO_ARRAY[@]}"; do
-            algo_trimmed=$(echo "$algo" | xargs)
-            if [ "$ALGORITHM" == "$algo_trimmed" ]; then
-              IS_ALLOWED="true"
-              break
-            fi
-          done
-          
-          if [ "$IS_ALLOWED" = "false" ]; then
-            echo "❌ Commit $COMMIT is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
-            FAILED=1
-          else
-            echo "✅ Commit $COMMIT is signed with allowed algorithm: $ALGORITHM"
-          fi
-        done
-        
-        if [ $FAILED -eq 1 ]; then
-          exit 1
-        fi
+        set -euo pipefail
+        python3 .github/actions/verify-commit-signature/verify_commits.py range
+      env:
+        INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
+        INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
+        INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
+        INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
+        INPUT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        INPUT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+    - name: Verify commits in push
+      if: github.event_name == 'push'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 .github/actions/verify-commit-signature/verify_commits.py range
+      env:
+        INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
+        INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
+        INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
+        INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
+        INPUT_BASE_SHA: ${{ github.event.before }}
+        INPUT_HEAD_SHA: ${{ github.event.after }}

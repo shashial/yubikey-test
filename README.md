@@ -40,6 +40,7 @@ jobs:
       
       - uses: ./.github/actions/verify-commit-signature
         with:
+          ssh-allowed-signers-file: '.github/allowed_signers'  # update to match your repo
           fail-on-unsigned: 'true'
           allowed-algorithms: 'ED25519-SK,ECDSA-SK'
 ```
@@ -60,7 +61,9 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
 |-------|-------------|----------|---------|
 | `commit-sha` | Commit SHA to verify (defaults to HEAD) | No | `HEAD` |
 | `fail-on-unsigned` | Fail if commit is not signed | No | `true` |
-| `allowed-algorithms` | Comma-separated list of allowed algorithms | No | `ED25519-SK,ECDSA-SK` |
+| `allowed-algorithms` | Comma-separated list of allowed SSH algorithms to enforce | No | `ED25519-SK,ECDSA-SK` |
+| `ssh-allowed-signers` | Inline contents of an `allowed_signers` file (principal + SSH public key pairs) | No | `''` |
+| `ssh-allowed-signers-file` | Path to an `allowed_signers` file in your repo (overrides `ssh-allowed-signers`) | No | `''` |
 
 ## 📤 Action Outputs
 
@@ -110,6 +113,21 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
     echo "Algorithm: ${{ steps.verify.outputs.algorithm }}"
     echo "Is allowed: ${{ steps.verify.outputs.is-allowed }}"
 ```
+
+## 🗂️ Providing SSH Allowed Signers
+
+Git can only validate SSH signatures when it knows which principals are trusted. Provide an `allowed_signers` file (the same format used by `ssh-keygen`) either inline through `ssh-allowed-signers` or by pointing the action at a file with `ssh-allowed-signers-file`:
+
+```
+dev@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC7...
+dev@example.com sk-ssh-ed25519@openssh.com AAAAE2V...... comment
+```
+
+- When using `ssh-allowed-signers`, store the contents in a secret and pass it as a multi-line string.
+- When you already keep an `allowed_signers` file in the repo, set `ssh-allowed-signers-file: '.github/allowed_signers'` (or similar) so every repository that reuses the action shares the same list.
+- Each line must contain a principal followed by the corresponding SSH public key. Git uses the commit author email as the principal by default, so ensure they match.
+
+Without this file GitHub Actions cannot cryptographically verify SSH signatures, and the action will fail early with guidance to provide it.
 
 ## 🔐 Setting Up Commit Signing
 
@@ -162,12 +180,11 @@ SSH key signing is simpler and works well with hardware security keys:
 
 ## 📝 Notes
 
-- The action automatically verifies all commits in a PR or push event
-- For pull requests, it checks all commits between base and head
+- The action automatically verifies every commit included in the triggering push or pull request (merge commits included)
+- Pull requests compare `base..head`; initial pushes fall back to the entire pushed history
 - The action requires `fetch-depth: 0` in checkout to access commit history
-- **SSH signatures**: The action extracts signature data directly from commits, so no additional configuration is needed in GitHub Actions
-- **GPG signatures**: Make sure your GPG keys are properly configured if using GPG signing
-- The action works without `gpg.ssh.allowedSignersFile` configuration by parsing signature data directly from commit objects
+- **SSH signatures**: A valid `allowed_signers` file is required (see above). Commits are only accepted when Git successfully verifies the signature and the detected key type matches an allowed algorithm.
+- **GPG signatures**: The action reports the fingerprint even when the public key is not available on the runner. Import the relevant public keys if you also want cryptographic verification to succeed.
 
 ## 🤝 License
 
