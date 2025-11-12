@@ -17,7 +17,7 @@ The action supports both **SSH key signatures** and **GPG signatures**, automati
 
 ## 🚀 Quick Start
 
-### Option 1: Use the Example Workflow
+### Option 1: Use theExample Workflow
 
 Simply copy `.github/workflows/verify-signatures.yml` to your repository. It will automatically verify all commits on push and pull requests.
 
