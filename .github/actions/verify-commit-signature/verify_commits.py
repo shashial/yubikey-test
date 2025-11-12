@@ -182,7 +182,8 @@ def parse_ssh_signature(block: str) -> Dict[str, str]:
     if version != 1:
         raise SSHSignatureParseError(f"unsupported SSH signature version {version}")
 
-    # Read namespace, reserved, hash algorithm
+    # Read public key, namespace, reserved and hash algorithm
+    public_key, idx = _read_ssh_string(buf, idx)
     namespace, idx = _read_ssh_string(buf, idx)
     reserved, idx = _read_ssh_string(buf, idx)
     hash_alg, idx = _read_ssh_string(buf, idx)
@@ -191,12 +192,9 @@ def parse_ssh_signature(block: str) -> Dict[str, str]:
         % (namespace.decode(errors="ignore"), len(reserved), hash_alg.decode(errors="ignore"))
     )
     signature_field, idx = _read_ssh_string(buf, idx)
-    debug(f"Signature field length: {len(signature_field)} bytes")
-
-    sig_buf = memoryview(signature_field)
-    public_key, offset = _read_ssh_string(sig_buf, 0)
-    signature_blob, _ = _read_ssh_string(sig_buf, offset)
-    debug(f"Public key blob length: {len(public_key)} bytes; signature blob length: {len(signature_blob)} bytes")
+    debug(
+        f"Public key blob length: {len(public_key)} bytes; signature blob length: {len(signature_field)} bytes"
+    )
 
     key_buf = memoryview(public_key)
     key_type_raw, _ = _read_ssh_string(key_buf, 0)
