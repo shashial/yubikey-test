@@ -185,6 +185,7 @@ SSH key signing is simpler and works well with hardware security keys:
 - The action requires `fetch-depth: 0` in checkout to access commit history
 - **SSH signatures**: Provide an `allowed_signers` file (see above) for full verification. If it is missing, the action still reports the detected algorithm/fingerprint but marks the result as unverified.
 - **GPG signatures**: The action reports the fingerprint even when the public key is not available on the runner. Import the relevant public keys if you also want cryptographic verification to succeed.
+- Need extra diagnostics? Set the environment variable `SIGNATURE_DEBUG=1` on the step to print detailed parsing logs for troubleshooting.
 
 ## 🤝 License
 

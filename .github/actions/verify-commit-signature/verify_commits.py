@@ -14,6 +14,14 @@ import tempfile
 from typing import Dict, List, Optional, Tuple
 
 
+DEBUG = os.environ.get("SIGNATURE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def debug(msg: str) -> None:
+    if DEBUG:
+        print(f"[verify-commit-signature] {msg}", file=sys.stderr)
+
+
 def _read_git_output(args: List[str]) -> subprocess.CompletedProcess:
     result = subprocess.run(
         ["git", *args],
@@ -161,6 +169,7 @@ def parse_ssh_signature(block: str) -> Dict[str, str]:
         raise SSHSignatureParseError("missing SSH signature payload")
 
     decoded = base64.b64decode(base64_payload)
+    debug(f"Decoded SSH signature length: {len(decoded)} bytes")
     if not decoded.startswith(b"SSHSIG"):
         raise SSHSignatureParseError("unexpected SSH signature marker")
 
@@ -174,14 +183,20 @@ def parse_ssh_signature(block: str) -> Dict[str, str]:
         raise SSHSignatureParseError(f"unsupported SSH signature version {version}")
 
     # Read namespace, reserved, hash algorithm
-    _, idx = _read_ssh_string(buf, idx)
-    _, idx = _read_ssh_string(buf, idx)
-    _, idx = _read_ssh_string(buf, idx)
+    namespace, idx = _read_ssh_string(buf, idx)
+    reserved, idx = _read_ssh_string(buf, idx)
+    hash_alg, idx = _read_ssh_string(buf, idx)
+    debug(
+        "Namespace=%s ReservedLen=%d HashAlg=%s"
+        % (namespace.decode(errors="ignore"), len(reserved), hash_alg.decode(errors="ignore"))
+    )
     signature_field, idx = _read_ssh_string(buf, idx)
+    debug(f"Signature field length: {len(signature_field)} bytes")
 
     sig_buf = memoryview(signature_field)
     public_key, offset = _read_ssh_string(sig_buf, 0)
     signature_blob, _ = _read_ssh_string(sig_buf, offset)
+    debug(f"Public key blob length: {len(public_key)} bytes; signature blob length: {len(signature_blob)} bytes")
 
     key_buf = memoryview(public_key)
     key_type_raw, _ = _read_ssh_string(key_buf, 0)
@@ -255,9 +270,11 @@ def infer_ssh_from_text(signature_block: str, log_text: str) -> Optional[Dict[st
         algorithm = "ECDSA"
 
     if not algorithm:
+        debug("Heuristic SSH detection failed; algorithm not found in signature/log text")
         return None
 
     fingerprint = _fingerprint_from_text(log_text) or ""
+    debug("Heuristic SSH detection succeeded (algorithm=%s)" % algorithm)
     return {"algorithm": algorithm, "fingerprint": fingerprint}
 
 
@@ -282,6 +299,7 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
         try:
             ssh_info = parse_ssh_signature(signature_block)
         except SSHSignatureParseError as exc:
+            debug(f"SSH signature parse failed: {exc}")
             fallback = infer_ssh_from_text(signature_block, log_text)
             if not fallback:
                 return {
@@ -301,6 +319,10 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
             if not cfg.ssh_verification_ready or _allowed_signers_error(verify_output):
                 verified = False
                 note = "SSH signature detected but allowed_signers file missing on runner"
+                debug(
+                    "SSH verification skipped (allowed_signers missing). git output: %s"
+                    % verify_output
+                )
             else:
                 reason = verify_output or "git verify-commit failed for SSH signature"
                 return {
