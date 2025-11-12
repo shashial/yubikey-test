@@ -69,6 +69,7 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
 | `is-signed` | Whether the commit is signed (`true`/`false`) |
 | `algorithm` | The signature algorithm used |
 | `is-allowed` | Whether the signature uses an allowed algorithm (`true`/`false`) |
+| `fingerprint` | Fingerprint of the signing key (if available) |
 
 ## 🔧 Usage Examples
 

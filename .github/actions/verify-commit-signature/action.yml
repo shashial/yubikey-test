@@ -24,6 +24,9 @@ outputs:
   is-allowed:
     description: 'Whether the signature uses an allowed algorithm'
     value: ${{ steps.verify.outputs.is-allowed }}
+  fingerprint:
+    description: 'Fingerprint of the signing key (if available)'
+    value: ${{ steps.verify.outputs.fingerprint }}
 
 runs:
   using: 'composite'
@@ -34,6 +37,7 @@ runs:
       run: |
         COMMIT_SHA="${{ inputs.commit-sha }}"
         ALLOWED_ALGOS="${{ inputs.allowed-algorithms }}"
+        DETECTED_FINGERPRINT=""
         
         # Function to check commit signature and determine algorithm
         check_commit() {
@@ -42,6 +46,7 @@ runs:
           local log_output
           local key_id
           local key_fingerprint
+          local fingerprint=""
           local algorithm=""
           local is_sk=false
           local signature_type=""
@@ -106,6 +111,8 @@ runs:
               key_fingerprint=$(echo "$verify_output" | grep -i "fingerprint" | sed -n 's/.*[Ff]ingerprint[^:]*:\s*\([A-Za-z0-9+/=_-]*\).*/\1/p' | head -1 || echo "")
             fi
             
+            fingerprint="$key_fingerprint"
+            
             # Extract signature data from raw commit to parse key type
             # SSH signatures in git commits contain the key type in the signature blob
             # The signature is base64 encoded, so we need to check both raw and decoded
@@ -144,22 +151,40 @@ runs:
             if echo "$sig_base64" | grep -qE "c2stc3NoLWVkMjU1MTlA|YzJrLWMzc0gtZWQyNTUxOUB"; then
               algorithm="ED25519"
               is_sk=true
+              if [ -z "$fingerprint" ]; then
+                fingerprint="$key_fingerprint"
+              fi
             elif echo "$sig_base64" | grep -qE "c2stZWNkc2E|YzJrLWVjZHNh"; then
               algorithm="ECDSA"
               is_sk=true
+              if [ -z "$fingerprint" ]; then
+                fingerprint="$key_fingerprint"
+              fi
             fi
             
             # Check raw signature data (might have some readable parts)
             if echo "$sig_data" | grep -q "sk-ssh-ed25519"; then
               algorithm="ED25519"
               is_sk=true
+              if [ -z "$fingerprint" ]; then
+                fingerprint="$key_fingerprint"
+              fi
             elif echo "$sig_data" | grep -q "sk-ecdsa"; then
               algorithm="ECDSA"
               is_sk=true
+              if [ -z "$fingerprint" ]; then
+                fingerprint="$key_fingerprint"
+              fi
             elif echo "$sig_data" | grep -q "ssh-ed25519"; then
               algorithm="ED25519"
+              if [ -z "$fingerprint" ]; then
+                fingerprint="$key_fingerprint"
+              fi
             elif echo "$sig_data" | grep -qE "ecdsa-sha2|ecdsa"; then
               algorithm="ECDSA"
+              if [ -z "$fingerprint" ]; then
+                fingerprint="$key_fingerprint"
+              fi
             fi
             
             # Check for security key (SK) key types in the output
@@ -216,6 +241,9 @@ runs:
               
               if [ -n "$key_info" ]; then
                 algo_code=$(echo "$key_info" | grep "^pub:" | cut -d: -f4 || echo "")
+                if [ -z "$fingerprint" ]; then
+                  fingerprint=$(echo "$key_info" | grep "^fpr:" | head -1 | cut -d: -f10 || echo "")
+                fi
                 
                 case "$algo_code" in
                   22) algorithm="ED25519" ;;
@@ -255,6 +283,12 @@ runs:
             algorithm="${algorithm}-SK"
           fi
           
+          if [ -z "$fingerprint" ]; then
+            fingerprint=$(echo "$log_output" | grep -i "fingerprint" | head -1 | sed -E 's/.*fingerprint[: ]*//I' | tr -d ' ' || echo "")
+          fi
+          
+          DETECTED_FINGERPRINT="$fingerprint"
+          
           # Return algorithm or empty if not found
           # IMPORTANT: Only output the algorithm to stdout, all debug goes to stderr
           if [ -n "$algorithm" ]; then
@@ -279,6 +313,7 @@ runs:
           echo "is-signed=false" >> $GITHUB_OUTPUT
           echo "algorithm=" >> $GITHUB_OUTPUT
           echo "is-allowed=false" >> $GITHUB_OUTPUT
+          echo "fingerprint=" >> $GITHUB_OUTPUT
           
           if [ "${{ inputs.fail-on-unsigned }}" == "true" ]; then
             echo "❌ Commit $COMMIT_SHA is not signed or signature could not be verified"
@@ -303,6 +338,7 @@ runs:
         echo "is-signed=true" >> $GITHUB_OUTPUT
         echo "algorithm=$ALGORITHM" >> $GITHUB_OUTPUT
         echo "is-allowed=$IS_ALLOWED" >> $GITHUB_OUTPUT
+        echo "fingerprint=$DETECTED_FINGERPRINT" >> $GITHUB_OUTPUT
         
         if [ "$IS_ALLOWED" = "false" ]; then
           echo "❌ Commit $COMMIT_SHA is signed with algorithm '$ALGORITHM', but only $ALLOWED_ALGOS are allowed"
