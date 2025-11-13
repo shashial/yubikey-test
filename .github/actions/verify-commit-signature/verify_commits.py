@@ -460,23 +460,27 @@ def write_outputs(result: Dict[str, object]) -> None:
 
 def handle_single(cfg: Config) -> int:
     commit = cfg.commit_sha or "HEAD"
+    commit_display = commit
+    rev_parse = _read_git_output(["rev-parse", commit])
+    if rev_parse.returncode == 0:
+        commit_display = rev_parse.stdout.strip()
     result = check_commit(commit, cfg)
     write_outputs(result)
 
     if not result.get("is_signed"):
         message = result.get("reason", "Commit is not signed")
-        print(f"❌ {commit} - {message}")
+        print(f"❌ {commit_display} - {message}")
         return 1 if cfg.fail_on_unsigned else 0
 
     if result.get("signature_type") == "SSH" and not result.get("is_allowed", False):
         print(
-            f"❌ {commit} - Signed with disallowed algorithm '{result.get('algorithm')}'"
+            f"❌ {commit_display} - Signed with disallowed algorithm '{result.get('algorithm')}'"
         )
         return 1
 
     if result.get("signature_type") == "GPG" and not result.get("is_allowed", False):
         print(
-            f"❌ {commit} - GPG fingerprint '{result.get('fingerprint') or 'UNKNOWN'}' is not allowed"
+            f"❌ {commit_display} - GPG fingerprint '{result.get('fingerprint') or 'UNKNOWN'}' is not allowed"
         )
         return 1
 
@@ -489,9 +493,9 @@ def handle_single(cfg: Config) -> int:
         status = "ℹ️"
 
     if algo:
-        line = f"{status} {commit} - Algorithm: {algo}"
+        line = f"{status} {commit_display} - Algorithm: {algo}"
     else:
-        line = f"{status} {commit} - Signed"
+        line = f"{status} {commit_display} - Signed"
     if fingerprint:
         line += f" (fingerprint: {fingerprint})"
     if result.get("note"):
