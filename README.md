@@ -149,6 +149,7 @@ If you rely on GPG-signed commits, define `gpg-allowed-fingerprints` to limit wh
 - To keep the list transparent, add a tracked file (e.g., `.github/allowed_gpg_fingerprints`) and pass `gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'`.
 - Any surrounding punctuation (parentheses, spaces) is stripped automatically before comparison, so you can copy values directly from `git log --show-signature` output.
 - If the fingerprint cannot be extracted (e.g., key missing on the runner) the action marks it as “not allowed” in the report.
+- When a fingerprint is missing, the JSON report now includes `raw_signature_output` with the exact `git log --show-signature` text so you can see which key Git requested.
 - External contributors keep working as usual: unknown fingerprints simply show up as “not in allow list” so reviewers can decide what to do.
 
 ## 🔐 Setting Up Commit Signing
