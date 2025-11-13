@@ -90,15 +90,23 @@ class Config:
 
 def resolve_allowed_gpg_fingerprints(cfg: Config) -> None:
     fingerprints = list(cfg.allowed_gpg_fingerprints)
+    file_candidates: List[pathlib.Path] = []
+
     file_path = cfg.gpg_allowed_fingerprints_file.strip()
     if file_path:
-        path = pathlib.Path(file_path).expanduser()
-        if not path.is_file():
-            raise SystemExit(
-                f"Provided gpg-allowed-fingerprints-file '{file_path}' does not exist"
-            )
-        file_contents = path.read_text(encoding="utf-8")
-        fingerprints.extend(_normalize_fingerprints(file_contents))
+        file_candidates.append(pathlib.Path(file_path).expanduser())
+
+    action_path = os.environ.get("GITHUB_ACTION_PATH")
+    if action_path:
+        file_candidates.append(pathlib.Path(action_path) / "allowed_gpg_fingerprints")
+    # Fallback to script directory in case GITHUB_ACTION_PATH is not set (local runs)
+    file_candidates.append(pathlib.Path(__file__).resolve().parent / "allowed_gpg_fingerprints")
+
+    for candidate in file_candidates:
+        if candidate.is_file():
+            file_contents = candidate.read_text(encoding="utf-8")
+            fingerprints.extend(_normalize_fingerprints(file_contents))
+            break  # Only use the first available file
 
     deduped: List[str] = []
     seen = set()

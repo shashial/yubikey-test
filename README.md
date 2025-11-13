@@ -2,18 +2,14 @@
 
 A modular GitHub Action that inspects commit signatures and reports whether hardware-backed ED25519-SK/ECDSA-SK (SSH) or vetted GPG keys were used.
 
-## 🎯 Purpos
+## 🎯 Purpose
 
 This action surfaces signature metadata for every commit (push or PR) so reviewers can see whether hardware security keys (YubiKey, etc.) were used. It highlights the algorithms encountered and matches GPG fingerprints against an allow list. Specifically, it tells you when a commit was signed with:
-- **ED25519-SK** algorithm (SSH or GPG)
-- **ECDSA-SK** algorithm (SSH or GPG)
+- **ED25519-SK** algorithm (SSH)
+- **ECDSA-SK** algorithm (SSH)
+- Allowlisted GPG
 
 The action supports both **SSH key signatures** and **GPG signatures**, automatically detecting the signature type and verifying the algorithm used.
-
-## 📦 What's Included
-
-- **Composite Action** (`.github/actions/verify-commit-signature/`) - The reusable action
-- **Example Workflow** (`.github/workflows/verify-signatures.yml`) - Shows how to use it
 
 ## 🚀 Quick Start
 
@@ -147,7 +143,8 @@ If you rely on GPG-signed commits, define `gpg-allowed-fingerprints` to limit wh
 ```
 
 - Fingerprints are case-insensitive internally, but store them uppercase for clarity.
-- To keep the list transparent, add a tracked file (e.g., `.github/allowed_gpg_fingerprints`) and pass `gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'`.
+- The action ships with a default `allowed_gpg_fingerprints` file alongside the code. When other repositories consume the action via `uses: your-org/...`, the bundled list is applied automatically unless you override it with `gpg-allowed-fingerprints` / `file` inputs.
+- To keep the list transparent in the repo that hosts the action, continue to edit `.github/actions/verify-commit-signature/allowed_gpg_fingerprints` (or override it per repo with `gpg-allowed-fingerprints-file`).
 - Any surrounding punctuation (parentheses, spaces) is stripped automatically before comparison, so you can copy values directly from `git log --show-signature` output.
 - If the fingerprint cannot be extracted (e.g., key missing on the runner) the action marks it as “not allowed” in the report.
 - When a fingerprint is missing, the JSON report now includes `raw_signature_output` with the exact `git log --show-signature` text so you can see which key Git requested.
