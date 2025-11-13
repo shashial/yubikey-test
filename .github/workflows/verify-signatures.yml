@@ -14,7 +14,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history to verify commits
+          fetch-depth: 0
+          filter: blob:none  # Fetch commit history without blobs for faster signature checks
 
       - name: Verify commit signatures
         uses: ./.github/actions/verify-commit-signature
