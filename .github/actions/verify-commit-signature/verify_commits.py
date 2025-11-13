@@ -56,6 +56,7 @@ class Config:
     base_sha: str
     head_sha: str
     fail_on_violation: bool
+    initial_push_scope: str  # 'full' or 'head-only'
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -74,6 +75,10 @@ class Config:
             head_sha=os.environ.get("INPUT_HEAD_SHA", ""),
             fail_on_violation=os.environ.get("INPUT_FAIL_ON_POLICY_VIOLATION", "true").lower()
             in {"1", "true", "yes", "on"},
+            initial_push_scope=(
+                os.environ.get("INPUT_INITIAL_PUSH_SCOPE", "full").strip().lower()
+                or "full"
+            ),
         )
 
 
@@ -358,11 +363,21 @@ def commits_in_range(cfg: Config) -> List[str]:
     rev_range = head
     if base and base != zero:
         rev_range = f"{base}..{head}"
+        rev_list = _run_git(["rev-list", "--reverse", rev_range])
+        if rev_list.returncode != 0:
+            raise SystemExit(rev_list.stderr.strip() or "Failed to enumerate commits")
+        commits = [line.strip() for line in rev_list.stdout.splitlines() if line.strip()]
+        if not commits:
+            commits = [head]
+        return commits
 
-    rev_list = _run_git(["rev-list", "--reverse", rev_range])
+    # Initial push (no base). Respect configured scope.
+    if cfg.initial_push_scope == "head-only":
+        return [head]
+
+    rev_list = _run_git(["rev-list", "--reverse", head])
     if rev_list.returncode != 0:
         raise SystemExit(rev_list.stderr.strip() or "Failed to enumerate commits")
-
     commits = [line.strip() for line in rev_list.stdout.splitlines() if line.strip()]
     if not commits:
         commits = [head]
