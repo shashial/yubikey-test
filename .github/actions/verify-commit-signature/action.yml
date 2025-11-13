@@ -17,6 +17,10 @@ inputs:
     description: 'Path to a file containing newline-separated GPG fingerprints (combined with inline list)'
     required: false
     default: ''
+  fail-on-policy-violation:
+    description: 'Fail the job when a commit is unsigned or does not meet the allow list criteria'
+    required: false
+    default: 'true'
 
 outputs:
   is-signed:
@@ -46,6 +50,7 @@ runs:
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
         INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
+        INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}
 
     - name: Verify commits in pull request
       if: github.event_name == 'pull_request'
@@ -59,6 +64,7 @@ runs:
         INPUT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         INPUT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
+        INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}
 
     - name: Verify commits in push
       if: github.event_name == 'push'
@@ -72,3 +78,4 @@ runs:
         INPUT_BASE_SHA: ${{ github.event.before }}
         INPUT_HEAD_SHA: ${{ github.event.after }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
+        INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}

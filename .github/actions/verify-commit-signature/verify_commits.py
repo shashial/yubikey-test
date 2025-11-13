@@ -55,6 +55,7 @@ class Config:
     gpg_allowed_fingerprints_file: str
     base_sha: str
     head_sha: str
+    fail_on_violation: bool
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -71,6 +72,8 @@ class Config:
             ),
             base_sha=os.environ.get("INPUT_BASE_SHA", ""),
             head_sha=os.environ.get("INPUT_HEAD_SHA", ""),
+            fail_on_violation=os.environ.get("INPUT_FAIL_ON_POLICY_VIOLATION", "true").lower()
+            in {"1", "true", "yes", "on"},
         )
 
 
@@ -392,21 +395,25 @@ def handle_single(cfg: Config) -> int:
     commit = resolved.stdout.strip() if resolved.returncode == 0 else commit_ref
     result = check_commit(commit_ref, cfg)
     write_outputs(result)
+    violation = _result_has_violation(result)
     if os.environ.get("SIGNATURE_VERBOSE", "").strip().lower() in {"1", "true", "yes", "on"}:
         _print_commit_result(result, commit)
         _emit_report([result])
-    return 0
+    return 1 if (cfg.fail_on_violation and violation) else 0
 
 
 def handle_range(cfg: Config) -> int:
     commits = commits_in_range(cfg)
     report: List[Dict[str, object]] = []
+    violation_found = False
     for commit in commits:
         result = check_commit(commit, cfg)
         _print_commit_result(result, commit)
         report.append(result)
+        if _result_has_violation(result):
+            violation_found = True
     _emit_report(report)
-    return 0
+    return 1 if (cfg.fail_on_violation and violation_found) else 0
 
 
 def _status_symbol(result: Dict[str, object]) -> str:
@@ -439,6 +446,17 @@ def _print_commit_result(result: Dict[str, object], commit_display: str) -> None
     if not result.get("is_signed"):
         message += " [commit not signed]"
     print(message)
+
+
+def _result_has_violation(result: Dict[str, object]) -> bool:
+    if not result.get("is_signed"):
+        return True
+    sig_type = result.get("signature_type")
+    if sig_type == "SSH" and not result.get("ssh_algorithm_allowed"):
+        return True
+    if sig_type == "GPG" and not result.get("gpg_fingerprint_allowed"):
+        return True
+    return False
 
 
 def _emit_report(report: List[Dict[str, object]]) -> None:

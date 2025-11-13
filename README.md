@@ -62,6 +62,7 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
 | `allowed-algorithms` | Comma-separated list of allowed SSH algorithms to flag as compliant | No | `ED25519-SK,ECDSA-SK` |
 | `gpg-allowed-fingerprints` | Comma/newline separated list of trusted GPG key fingerprints (uppercase). Leave blank to accept any GPG signer. | No | `''` |
 | `gpg-allowed-fingerprints-file` | Path to a file (newline-separated fingerprints) that is combined with `gpg-allowed-fingerprints`. | No | `''` |
+| `fail-on-policy-violation` | Fail the workflow when an unsigned commit or disallowed algorithm/fingerprint is found. Set to `'false'` for reporting-only mode. | No | `true` |
 
 ## 📤 Action Outputs
 
@@ -201,11 +202,12 @@ SSH key signing is simpler and works well with hardware security keys:
 ## 📝 Notes
 
 - Every commit reachable from the triggering push/pull request is inspected (merge commits included) as long as `actions/checkout` runs with `fetch-depth: 0`.
-- The action is informational: it never fails the workflow. Instead it prints `✅/⚠️/ℹ️` markers and writes `commit-signature-report.json` so you can enforce policy downstream.
+- The action prints `✅/⚠️/ℹ️` markers and writes `commit-signature-report.json`. With `fail-on-policy-violation: 'true'` (default) any unsigned/disallowed commit causes the job to fail; set it to `'false'` for reporting-only mode.
 - Use `allowed-algorithms` to define which SSH key types count as “hardware-backed” for your org (defaults to `ED25519-SK,ECDSA-SK`).
 - Use `gpg-allowed-fingerprints`/`file` to highlight known YubiKey-backed GPG keys; unknown fingerprints simply show up as “not in allow list”.
 - Need extra diagnostics? Set `SIGNATURE_DEBUG=1` on the step to print detailed parsing logs.
 - Want the single-commit step (used for outputs) to stay silent? Leave it as-is. To surface its logs as well, set `SIGNATURE_VERBOSE=1` on the action step.
+- By default the action fails the job when a commit is unsigned or outside your allow list (`fail-on-policy-violation: 'true'`). Set it to `'false'` if you only need reporting.
 
 ## 🤝 License
 
