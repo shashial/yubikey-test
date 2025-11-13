@@ -25,6 +25,10 @@ inputs:
     description: 'When pushing a branch for the first time, choose whether to scan the full history (full) or only HEAD (head-only)'
     required: false
     default: 'full'
+  ignore-github-merge-commits:
+    description: 'Ignore auto-generated merge commits created by GitHub (default true)'
+    required: false
+    default: 'true'
 
 outputs:
   is-signed:
@@ -56,6 +60,7 @@ runs:
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
         INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}
         INPUT_INITIAL_PUSH_SCOPE: ${{ inputs.initial-push-scope }}
+        INPUT_IGNORE_GITHUB_MERGE_COMMITS: ${{ inputs.ignore-github-merge-commits }}
 
     - name: Verify commits in pull request
       if: github.event_name == 'pull_request'
@@ -71,6 +76,7 @@ runs:
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
         INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}
         INPUT_INITIAL_PUSH_SCOPE: ${{ inputs.initial-push-scope }}
+        INPUT_IGNORE_GITHUB_MERGE_COMMITS: ${{ inputs.ignore-github-merge-commits }}
 
     - name: Verify commits in push
       if: github.event_name == 'push'
@@ -86,3 +92,4 @@ runs:
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
         INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}
         INPUT_INITIAL_PUSH_SCOPE: ${{ inputs.initial-push-scope }}
+        INPUT_IGNORE_GITHUB_MERGE_COMMITS: ${{ inputs.ignore-github-merge-commits }}

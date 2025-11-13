@@ -57,6 +57,7 @@ class Config:
     head_sha: str
     fail_on_violation: bool
     initial_push_scope: str  # 'full' or 'head-only'
+    ignore_github_merge_commits: bool
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -79,6 +80,10 @@ class Config:
                 os.environ.get("INPUT_INITIAL_PUSH_SCOPE", "full").strip().lower()
                 or "full"
             ),
+            ignore_github_merge_commits=os.environ.get(
+                "INPUT_IGNORE_GITHUB_MERGE_COMMITS", "true"
+            ).lower()
+            in {"1", "true", "yes", "on"},
         )
 
 
@@ -279,6 +284,10 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
 
     signature_type = detect_signature_type(signature_block)
 
+    git_generated = False
+    if signature_type == "GPG" and "github" in log_text.lower() and "cannot check signature" in log_text.lower():
+        git_generated = "using rsa key" in log_text.lower()
+
     if signature_type == "SSH":
         try:
             ssh_info = parse_ssh_signature(signature_block)
@@ -347,6 +356,9 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
                 "notes": notes,
             }
         )
+        if cfg.ignore_github_merge_commits and git_generated:
+            result["ignored"] = True
+            result["_github_generated"] = True
         return result
 
     result.update(
@@ -435,6 +447,8 @@ def handle_range(cfg: Config) -> int:
 
 
 def _status_symbol(result: Dict[str, object]) -> str:
+    if result.get("ignored", False):
+        return "ℹ️"
     if not result.get("is_signed"):
         return "⚠️"
     if result.get("signature_type") == "SSH":
@@ -455,18 +469,25 @@ def _print_commit_result(result: Dict[str, object], commit_display: str) -> None
     if fingerprint:
         message += f" fingerprint={fingerprint}"
     notes = result.get("notes") or []
-    if notes:
-        message += " [" + ", ".join(notes) + "]"
-    if signature_type == "SSH" and not result.get("ssh_algorithm_allowed"):
-        message += " [SSH algorithm not in allowed list]"
-    if signature_type == "GPG" and not result.get("gpg_fingerprint_allowed"):
-        message += " [GPG fingerprint not in allow list]"
+    effective_notes = list(notes)
+    silent = result.get("_github_generated", False) and result.get("ignored", False)
+    if result.get("signature_type") == "SSH" and not result.get("ssh_algorithm_allowed"):
+        effective_notes.append("SSH algorithm not in allowed list")
+    if result.get("signature_type") == "GPG" and not result.get("gpg_fingerprint_allowed"):
+        effective_notes.append("GPG fingerprint not in allow list")
     if not result.get("is_signed"):
-        message += " [commit not signed]"
-    print(message)
+        effective_notes.append("commit not signed")
+    if silent:
+        effective_notes.append("ignored github-generated merge commit")
+    if effective_notes:
+        message += " [" + ", ".join(effective_notes) + "]"
+    if not silent:
+        print(message)
 
 
 def _result_has_violation(result: Dict[str, object]) -> bool:
+    if result.get("ignored", False):
+        return False
     if not result.get("is_signed"):
         return True
     sig_type = result.get("signature_type")

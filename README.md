@@ -64,6 +64,7 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
 | `gpg-allowed-fingerprints-file` | Path to a file (newline-separated fingerprints) that is combined with `gpg-allowed-fingerprints`. | No | `''` |
 | `fail-on-policy-violation` | Fail the workflow when an unsigned commit or disallowed algorithm/fingerprint is found. Set to `'false'` for reporting-only mode. | No | `true` |
 | `initial-push-scope` | For the first push of a branch (`before=000…`), choose `'full'` to scan the branch history or `'head-only'` to scan only the latest commit. | No | `full` |
+| `ignore-github-merge-commits` | Ignore the synthetic merge commits GitHub creates for PR CI runs (default `true`). Set to `'false'` if you want to enforce policy on those merges too. | No | `true` |
 
 ## 📤 Action Outputs
 
@@ -203,7 +204,7 @@ SSH key signing is simpler and works well with hardware security keys:
 
 ## 📝 Notes
 
-- Every commit reachable from the triggering push/pull request is inspected (merge commits included) as long as `actions/checkout` runs with `fetch-depth: 0`. For initial pushes where `before` is all zeros, set `initial-push-scope: 'head-only'` if you only want the tip commit scanned.
+- Every commit reachable from the triggering push/pull request is inspected (merge commits included) as long as `actions/checkout` runs with `fetch-depth: 0`. For initial pushes where `before` is all zeros, set `initial-push-scope: 'head-only'` if you only want the tip commit scanned. GitHub's synthetic merge commits are ignored by default; set `ignore-github-merge-commits: 'false'` to enforce policy on them too.
 - The action prints `✅/⚠️/ℹ️` markers and writes `commit-signature-report.json`. With `fail-on-policy-violation: 'true'` (default) any unsigned/disallowed commit causes the job to fail; set it to `'false'` for reporting-only mode.
 - Use `allowed-algorithms` to define which SSH key types count as “hardware-backed” for your org (defaults to `ED25519-SK,ECDSA-SK`).
 - Use `gpg-allowed-fingerprints`/`file` to highlight known YubiKey-backed GPG keys; unknown fingerprints simply show up as “not in allow list”.
