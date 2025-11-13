@@ -334,6 +334,8 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
         notes = [note]
         if not fingerprint:
             notes.append("GPG fingerprint unavailable")
+            result["raw_signature_output"] = log_text.strip()
+            notes.append("See raw_signature_output for git log --show-signature details")
 
         result.update(
             {
