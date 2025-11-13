@@ -21,6 +21,10 @@ inputs:
     description: 'Fail the job when a commit is unsigned or does not meet the allow list criteria'
     required: false
     default: 'true'
+  initial-push-scope:
+    description: 'When pushing a branch for the first time, choose whether to scan the full history (full) or only HEAD (head-only)'
+    required: false
+    default: 'full'
 
 outputs:
   is-signed:
@@ -51,6 +55,7 @@ runs:
         INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
         INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}
+        INPUT_INITIAL_PUSH_SCOPE: ${{ inputs.initial-push-scope }}
 
     - name: Verify commits in pull request
       if: github.event_name == 'pull_request'
@@ -65,6 +70,7 @@ runs:
         INPUT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
         INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}
+        INPUT_INITIAL_PUSH_SCOPE: ${{ inputs.initial-push-scope }}
 
     - name: Verify commits in push
       if: github.event_name == 'push'
@@ -79,3 +85,4 @@ runs:
         INPUT_HEAD_SHA: ${{ github.event.after }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
         INPUT_FAIL_ON_POLICY_VIOLATION: ${{ inputs.fail-on-policy-violation }}
+        INPUT_INITIAL_PUSH_SCOPE: ${{ inputs.initial-push-scope }}
