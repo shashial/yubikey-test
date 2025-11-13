@@ -153,6 +153,17 @@ If you rely on GPG-signed commits, define `gpg-allowed-fingerprints` to limit wh
 - When a fingerprint is missing, the JSON report now includes `raw_signature_output` with the exact `git log --show-signature` text so you can see which key Git requested.
 - External contributors keep working as usual: unknown fingerprints simply show up as “not in allow list” so reviewers can decide what to do.
 
+### Importing Trusted GPG Keys in CI
+
+GitHub runners do **not** automatically have your public keys, so GPG fingerprints stay “missing” unless you import them. Store the ASCII-armored keys in a secret (for example, `GPG_PUBLIC_KEYS`) and import them before invoking the action:
+
+```yaml
+- name: Import trusted GPG keys
+  run: echo "${{ secrets.GPG_PUBLIC_KEYS }}" | gpg --batch --import
+```
+
+You can concatenate multiple keys into the same secret. Once the keys are imported, the action can extract fingerprints and match them against `.github/allowed_gpg_fingerprints`.
+
 ## 🔐 Setting Up Commit Signing
 
 ### Option 1: SSH Key Signing (Recommended)
