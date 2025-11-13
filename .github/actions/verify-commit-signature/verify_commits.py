@@ -396,7 +396,8 @@ def handle_single(cfg: Config) -> int:
     result = check_commit(commit_ref, cfg)
     write_outputs(result)
     violation = _result_has_violation(result)
-    if os.environ.get("SIGNATURE_VERBOSE", "").strip().lower() in {"1", "true", "yes", "on"}:
+    verbose = os.environ.get("SIGNATURE_VERBOSE", "").strip().lower() in {"1", "true", "yes", "on"}
+    if violation or verbose:
         _print_commit_result(result, commit)
         _emit_report([result])
     return 1 if (cfg.fail_on_violation and violation) else 0
