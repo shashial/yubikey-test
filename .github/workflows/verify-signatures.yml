@@ -19,7 +19,5 @@ jobs:
       - name: Verify commit signatures
         uses: ./.github/actions/verify-commit-signature
         with:
-          fail-on-unsigned: 'false'
           allowed-algorithms: 'ED25519-SK,ECDSA-SK'
           gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'
-

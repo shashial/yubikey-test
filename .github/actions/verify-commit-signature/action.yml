@@ -5,10 +5,6 @@ inputs:
     description: 'Commit SHA to verify (defaults to HEAD)'
     required: false
     default: 'HEAD'
-  fail-on-unsigned:
-    description: 'Fail if a commit is not signed'
-    required: false
-    default: 'true'
   allowed-algorithms:
     description: 'Comma-separated list of allowed SSH signature algorithms (default: ED25519-SK,ECDSA-SK)'
     required: false
@@ -19,14 +15,6 @@ inputs:
     default: ''
   gpg-allowed-fingerprints-file:
     description: 'Path to a file containing newline-separated GPG fingerprints (combined with inline list)'
-    required: false
-    default: ''
-  ssh-allowed-signers:
-    description: 'Contents of an allowed_signers file used for ssh signature verification (principal public-key pairs)'
-    required: false
-    default: ''
-  ssh-allowed-signers-file:
-    description: 'Path to an allowed_signers file checked into the repo (overrides ssh-allowed-signers)'
     required: false
     default: ''
 
@@ -57,9 +45,6 @@ runs:
         INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
         INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
-        INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
-        INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
-        INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
 
     - name: Verify commits in pull request
@@ -71,9 +56,6 @@ runs:
       env:
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
         INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
-        INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
-        INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
-        INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
         INPUT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         INPUT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}
@@ -87,9 +69,6 @@ runs:
       env:
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
         INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
-        INPUT_FAIL_ON_UNSIGNED: ${{ inputs.fail-on-unsigned }}
-        INPUT_SSH_ALLOWED_SIGNERS: ${{ inputs.ssh-allowed-signers }}
-        INPUT_SSH_ALLOWED_SIGNERS_FILE: ${{ inputs.ssh-allowed-signers-file }}
         INPUT_BASE_SHA: ${{ github.event.before }}
         INPUT_HEAD_SHA: ${{ github.event.after }}
         INPUT_GPG_ALLOWED_FINGERPRINTS_FILE: ${{ inputs.gpg-allowed-fingerprints-file }}

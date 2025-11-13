@@ -1,10 +1,10 @@
 # GitHub Actions - Commit Signature Verification
 
-A modular GitHub Action that verifies commits are signed with ED25519-SK or ECDSA-SK algorithms.
+A modular GitHub Action that inspects commit signatures and reports whether hardware-backed ED25519-SK/ECDSA-SK (SSH) or vetted GPG keys were used.
 
 ## 🎯 Purpose
 
-This action ensures that all commits in your repository are signed using hardware security keys (YubiKey, etc.) with either:
+This action surfaces signature metadata for every commit (push or PR) so reviewers can see whether hardware security keys (YubiKey, etc.) were used. It highlights the algorithms encountered and matches GPG fingerprints against an allow list. Specifically, it tells you when a commit was signed with:
 - **ED25519-SK** algorithm (SSH or GPG)
 - **ECDSA-SK** algorithm (SSH or GPG)
 
@@ -40,9 +40,7 @@ jobs:
       
       - uses: ./.github/actions/verify-commit-signature
         with:
-          ssh-allowed-signers-file: '.github/allowed_signers'  # update to match your repo
           gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'
-          fail-on-unsigned: 'true'
           allowed-algorithms: 'ED25519-SK,ECDSA-SK'
 ```
 
@@ -61,10 +59,7 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `commit-sha` | Commit SHA to verify (defaults to HEAD) | No | `HEAD` |
-| `fail-on-unsigned` | Fail if commit is not signed | No | `true` |
-| `allowed-algorithms` | Comma-separated list of allowed SSH algorithms to enforce | No | `ED25519-SK,ECDSA-SK` |
-| `ssh-allowed-signers` | Inline contents of an `allowed_signers` file (principal + SSH public key pairs). Needed for full SSH verification. | No | `''` |
-| `ssh-allowed-signers-file` | Path to an `allowed_signers` file in your repo (overrides `ssh-allowed-signers`). Needed for full SSH verification. | No | `''` |
+| `allowed-algorithms` | Comma-separated list of allowed SSH algorithms to flag as compliant | No | `ED25519-SK,ECDSA-SK` |
 | `gpg-allowed-fingerprints` | Comma/newline separated list of trusted GPG key fingerprints (uppercase). Leave blank to accept any GPG signer. | No | `''` |
 | `gpg-allowed-fingerprints-file` | Path to a file (newline-separated fingerprints) that is combined with `gpg-allowed-fingerprints`. | No | `''` |
 
@@ -96,14 +91,6 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
     allowed-algorithms: 'ED25519-SK'
 ```
 
-### Non-Fatal Check (Warning Only)
-
-```yaml
-- uses: ./.github/actions/verify-commit-signature
-  with:
-    fail-on-unsigned: 'false'
-```
-
 ### Use Outputs
 
 ```yaml
@@ -117,27 +104,32 @@ If you push this to a template repository (e.g., `your-org/actions-templates`), 
     echo "Is allowed: ${{ steps.verify.outputs.is-allowed }}"
 ```
 
-## 🗂️ Providing SSH Allowed Signers
+## 📄 JSON Reports & Output
 
-Git can only **cryptographically verify** SSH signatures when it knows which principals are trusted. Provide an `allowed_signers` file (the same format used by `ssh-keygen`) either inline through `ssh-allowed-signers` or by pointing the action at a file with `ssh-allowed-signers-file`:
+For every run the action prints a human-readable line per commit *and* writes `commit-signature-report.json` in the workspace with a JSON array of entries:
 
+```json
+[
+  {
+    "commit": "3d998730d9d708afc3f773616c66e2ff3027c5a0",
+    "is_signed": true,
+    "signature_type": "GPG",
+    "algorithm": "GPG",
+    "fingerprint": "D47C...70F",
+    "ssh_algorithm_allowed": false,
+    "gpg_fingerprint_allowed": true,
+    "notes": ["GPG fingerprint matches allow list"]
+  }
+]
 ```
-dev@example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC7...
-dev@example.com sk-ssh-ed25519@openssh.com AAAAE2V...... comment
-```
 
-- When using `ssh-allowed-signers`, store the contents in a secret and pass it as a multi-line string.
-- When you already keep an `allowed_signers` file in the repo, set `ssh-allowed-signers-file: '.github/allowed_signers'` (or similar) so every repository that reuses the action shares the same list.
-- Each line must contain a principal followed by the corresponding SSH public key. Git uses the commit author email as the principal by default, so ensure they match.
+You can archive or forward this file to downstream systems (CloudWatch, SIEMs, etc.) without modifying the action itself.
 
-Without this file GitHub Actions cannot cryptographically verify SSH signatures. The action will still detect the algorithm type and fingerprint, but results will be marked with a warning to highlight that verification was skipped.
+### Interpreting Console Output
 
-### Handling Warning-Only Runs
-
-- If you run the action without configuring an `allowed_signers` file, expect log lines like:
-  `⚠️ <commit> - ED25519-SK ... [SSH signature detected but allowed_signers file missing on runner]`.
-- These warning runs still protect you by detecting the algorithm that was used, but they **do not** cryptographically prove the identity of the signer.
-- Add `ssh-allowed-signers` / `ssh-allowed-signers-file` as soon as possible so merges in downstream repositories fail instead of warn when signatures go missing.
+- `✅` — Signed and matches the allow list (SSH algorithm is in `allowed-algorithms`, or GPG fingerprint is present in your allow list).
+- `⚠️` — Signed but outside the allow list (e.g., SSH signature without `-SK`, unknown GPG fingerprint) **or** not signed at all.
+- `ℹ️` — Informational entries for signatures the parser could not fully classify. These should be rare; turn on `SIGNATURE_DEBUG=1` if you need to troubleshoot.
 
 ## 🎯 Restricting GPG Signers
 
@@ -154,8 +146,8 @@ If you rely on GPG-signed commits, define `gpg-allowed-fingerprints` to limit wh
 - Fingerprints are case-insensitive internally, but store them uppercase for clarity.
 - To keep the list transparent, add a tracked file (e.g., `.github/allowed_gpg_fingerprints`) and pass `gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'`.
 - Any surrounding punctuation (parentheses, spaces) is stripped automatically before comparison, so you can copy values directly from `git log --show-signature` output.
-- If the fingerprint cannot be extracted (e.g., key missing on the runner) the action treats it as disallowed.
-- Any GPG commit whose fingerprint is not in the allow list causes the workflow to fail, even when `fail-on-unsigned` is `false`.
+- If the fingerprint cannot be extracted (e.g., key missing on the runner) the action marks it as “not allowed” in the report.
+- External contributors keep working as usual: unknown fingerprints simply show up as “not in allow list” so reviewers can decide what to do.
 
 ## 🔐 Setting Up Commit Signing
 
@@ -208,13 +200,11 @@ SSH key signing is simpler and works well with hardware security keys:
 
 ## 📝 Notes
 
-- The action automatically verifies every commit included in the triggering push or pull request (merge commits included)
-- Pull requests compare `base..head`; initial pushes fall back to the entire pushed history
-- The action requires `fetch-depth: 0` in checkout to access commit history
-- **SSH signatures**: Provide an `allowed_signers` file (see above) for full verification. If it is missing, the action still reports the detected algorithm/fingerprint but marks the result as unverified.
-- **GPG signatures**: The action reports the fingerprint even when the public key is not available on the runner. Import the relevant public keys if you also want cryptographic verification to succeed.
-- Need extra diagnostics? Set the environment variable `SIGNATURE_DEBUG=1` on the step to print detailed parsing logs for troubleshooting.
-- **GPG allow list**: When `gpg-allowed-fingerprints` is set, only those fingerprints are accepted. Missing or mismatched fingerprints fail the workflow.
+- Every commit reachable from the triggering push/pull request is inspected (merge commits included) as long as `actions/checkout` runs with `fetch-depth: 0`.
+- The action is informational: it never fails the workflow. Instead it prints `✅/⚠️/ℹ️` markers and writes `commit-signature-report.json` so you can enforce policy downstream.
+- Use `allowed-algorithms` to define which SSH key types count as “hardware-backed” for your org (defaults to `ED25519-SK,ECDSA-SK`).
+- Use `gpg-allowed-fingerprints`/`file` to highlight known YubiKey-backed GPG keys; unknown fingerprints simply show up as “not in allow list”.
+- Need extra diagnostics? Set `SIGNATURE_DEBUG=1` on the step to print detailed parsing logs.
 
 ## 🤝 License
 
