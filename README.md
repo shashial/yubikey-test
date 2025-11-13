@@ -2,7 +2,7 @@
 
 A modular GitHub Action that inspects commit signatures and reports whether hardware-backed ED25519-SK/ECDSA-SK (SSH) or vetted GPG keys were used.
 
-## 🎯 Purpose
+## 🎯 Purposes
 
 The action surfaces signature metadata for every commit in a push or pull request so reviewers can confirm that hardware security keys (YubiKey, etc.) were used. It highlights the signature type, algorithm, fingerprint, and matches the result against the allow lists you define.
 
