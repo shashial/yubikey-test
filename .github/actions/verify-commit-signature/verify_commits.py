@@ -15,6 +15,7 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 DEBUG = os.environ.get("SIGNATURE_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+GITHUB_GPG_KEY_IDS = {"B5690EEEBB952194"}
 
 
 def debug(message: str) -> None:
@@ -241,6 +242,13 @@ def _fingerprint_from_text(text: str) -> Optional[str]:
     return None
 
 
+def _extract_gpg_key_id(text: str) -> Optional[str]:
+    match = re.search(r"key\s+([0-9A-Fa-f]{16})", text)
+    if match:
+        return match.group(1).upper()
+    return None
+
+
 def infer_ssh_from_text(signature_block: str, log_text: str) -> Optional[Dict[str, str]]:
     combined = f"{signature_block}\n{log_text}".lower()
     algorithm = ""
@@ -283,10 +291,15 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
         return result
 
     signature_type = detect_signature_type(signature_block)
-
-    git_generated = False
-    if signature_type == "GPG" and "github" in log_text.lower() and "cannot check signature" in log_text.lower():
-        git_generated = "using rsa key" in log_text.lower()
+    github_generated_merge = False
+    if signature_type == "GPG":
+        key_id = _extract_gpg_key_id(log_text) or ""
+        if (
+            key_id
+            and key_id in GITHUB_GPG_KEY_IDS
+            and "merge:" in log_text.lower()
+        ):
+            github_generated_merge = True
 
     if signature_type == "SSH":
         try:
@@ -356,7 +369,7 @@ def check_commit(commit: str, cfg: Config) -> Dict[str, object]:
                 "notes": notes,
             }
         )
-        if cfg.ignore_github_merge_commits and git_generated:
+        if cfg.ignore_github_merge_commits and github_generated_merge:
             result["ignored"] = True
             result["_github_generated"] = True
         return result
