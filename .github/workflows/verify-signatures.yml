@@ -21,3 +21,14 @@ jobs:
         with:
           allowed-algorithms: 'ED25519-SK,ECDSA-SK'
           gpg-allowed-fingerprints-file: '.github/allowed_gpg_fingerprints'
+          initial-push-scope: 'head-only'
+
+      - name: Show signature report
+        if: success() || failure()
+        run: |
+          if [ -f commit-signature-report.json ]; then
+            echo "Commit signature report:";
+            cat commit-signature-report.json;
+          else
+            echo "commit-signature-report.json not found";
+          fi
