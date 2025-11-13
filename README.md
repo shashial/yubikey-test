@@ -2,7 +2,7 @@
 
 A modular GitHub Action that inspects commit signatures and reports whether hardware-backed ED25519-SK/ECDSA-SK (SSH) or vetted GPG keys were used.
 
-## 🎯 Purpose
+## 🎯 Purposes
 
 The action surfaces signature metadata for every commit in a push or pull request so reviewers can confirm that hardware security keys (YubiKey, etc.) were used. It highlights the signature type, algorithm, fingerprint, and matches the result against the allow lists you define.
 
@@ -30,9 +30,13 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
+      - name: Import trusted GPG keys
+        run: echo "${{ secrets.GPG_PUBLIC_KEYS }}" | gpg --batch --import
+
       - uses: ./.github/actions/verify-commit-signature
         with:
           allowed-algorithms: 'ED25519-SK,ECDSA-SK'
+          initial-push-scope: 'head-only'
 ```
 
 ### Option 3: Reuse Across Repositories
@@ -40,9 +44,11 @@ jobs:
 Publish this action in a central repo and reference it elsewhere:
 
 ```yaml
-- uses: your-org/actions/.github/actions/verify-commit-signature@main
+- uses: your-org/yubikey-test/.github/actions/verify-commit-signature@main
   with:
     allowed-algorithms: 'ED25519-SK,ECDSA-SK'
+    initial-push-scope: 'head-only'
+    ignore-github-merge-commits: 'true'
 ```
 
 ## 📚 Action Inputs
