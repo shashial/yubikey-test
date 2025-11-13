@@ -138,7 +138,3 @@ See the README sections on SSH signing (ED25519-SK/ECDSA-SK) and GPG signing to 
 - GitHub’s synthetic PR merge commits are ignored by default (`ignore-github-merge-commits: 'true'`). Set it to `'false'` if you trust and want to enforce those signatures (import GitHub’s key `B5690EEEBB952194`).
 - `SIGNATURE_DEBUG=1` prints parser traces; `SIGNATURE_VERBOSE=1` makes the single-commit step log even when compliant.
 - `fail-on-policy-violation: 'true'` stops the build on violations. Switch to `'false'` to collect reports without blocking merges.
-
-## 🤝 License
-
-This template is provided as-is for use in any project.
