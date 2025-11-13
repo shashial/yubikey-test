@@ -52,7 +52,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        python3 .github/actions/verify-commit-signature/verify_commits.py single
+        python3 "${{ github.action_path }}/verify_commits.py" single
       env:
         INPUT_COMMIT_SHA: ${{ inputs.commit-sha }}
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
@@ -67,7 +67,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        python3 .github/actions/verify-commit-signature/verify_commits.py range
+        python3 "${{ github.action_path }}/verify_commits.py" range
       env:
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
         INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
@@ -83,7 +83,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        python3 .github/actions/verify-commit-signature/verify_commits.py range
+        python3 "${{ github.action_path }}/verify_commits.py" range
       env:
         INPUT_ALLOWED_ALGORITHMS: ${{ inputs.allowed-algorithms }}
         INPUT_GPG_ALLOWED_FINGERPRINTS: ${{ inputs.gpg-allowed-fingerprints }}
