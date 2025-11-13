@@ -100,18 +100,22 @@ Publish this action in a central repo and reference it elsewhere:
 Every run prints a line per commit (`✅` compliant, `⚠️` violation, `ℹ️` informational) and writes `commit-signature-report.json` in the workspace:
 
 ```json
-[
-  {
-    "commit": "41ba5cff6e24d81e241248f79e60db1bda4a0603",
-    "is_signed": true,
-    "signature_type": "GPG",
-    "algorithm": "GPG",
-    "fingerprint": "D47C0610BDEAD4D64CAE1917F67E56D797BAD70F",
-    "ssh_algorithm_allowed": false,
-    "gpg_fingerprint_allowed": true,
-    "notes": ["GPG fingerprint matches allow list"]
-  }
-]
+{
+  "repository": "your-org/your-repo",
+  "actor": "octocat",
+  "report": [
+    {
+      "commit": "41ba5cff6e24d81e241248f79e60db1bda4a0603",
+      "is_signed": true,
+      "signature_type": "GPG",
+      "algorithm": "GPG",
+      "fingerprint": "D47C0610BDEAD4D64CAE1917F67E56D797BAD70F",
+      "ssh_algorithm_allowed": false,
+      "gpg_fingerprint_allowed": true,
+      "notes": ["GPG fingerprint matches allow list"]
+    }
+  ]
+}
 ```
 
 When fingerprints are missing, the report includes `raw_signature_output` (the full `git log --show-signature` text) so you can see which key Git requested.

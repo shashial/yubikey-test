@@ -524,7 +524,12 @@ def _emit_report(report: List[Dict[str, object]]) -> None:
         return
     workspace = pathlib.Path(os.environ.get("GITHUB_WORKSPACE", "."))
     report_path = workspace / "commit-signature-report.json"
-    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    metadata = {
+        "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+        "actor": os.environ.get("GITHUB_ACTOR", ""),
+        "report": report,
+    }
+    report_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     print(f"📝 Commit signature report written to {report_path}")
 
 
