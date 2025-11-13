@@ -205,6 +205,7 @@ SSH key signing is simpler and works well with hardware security keys:
 - Use `allowed-algorithms` to define which SSH key types count as “hardware-backed” for your org (defaults to `ED25519-SK,ECDSA-SK`).
 - Use `gpg-allowed-fingerprints`/`file` to highlight known YubiKey-backed GPG keys; unknown fingerprints simply show up as “not in allow list”.
 - Need extra diagnostics? Set `SIGNATURE_DEBUG=1` on the step to print detailed parsing logs.
+- Want the single-commit step (used for outputs) to stay silent? Leave it as-is. To surface its logs as well, set `SIGNATURE_VERBOSE=1` on the action step.
 
 ## 🤝 License
 

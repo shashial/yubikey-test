@@ -392,8 +392,9 @@ def handle_single(cfg: Config) -> int:
     commit = resolved.stdout.strip() if resolved.returncode == 0 else commit_ref
     result = check_commit(commit_ref, cfg)
     write_outputs(result)
-    _print_commit_result(result, commit)
-    _emit_report([result])
+    if os.environ.get("SIGNATURE_VERBOSE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        _print_commit_result(result, commit)
+        _emit_report([result])
     return 0
 
 
